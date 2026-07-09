@@ -1,0 +1,23 @@
+outputs/
+samples/
+*.exe.WebView2/
+tmp/
+*.log
+.env*
+__pycache__/
+*.pyc*
+.venv*/
+apps/desktop-tauri/node_modules/
+apps/desktop-tauri/dist/
+apps/desktop-tauri/src-tauri/target/
+/tmp_rust_check*
+/rmeta*/
+/rustc*/
+
+# Local model weights are intentionally kept outside version control.
+models/*
+!models/README.md
+
+# Local profile files may contain encrypted API keys.
+config/summary_profiles.toml
+config/asr_profiles.toml

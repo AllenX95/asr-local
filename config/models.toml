@@ -1,0 +1,14 @@
+# All model paths are project-relative by default.
+# Put the downloaded model directories under ./models and keep this file updated if you use different names.
+
+model_root = "models"
+
+[qwen3_asr_1_7b]
+path = "models/Qwen/Qwen3-ASR-1.7B"
+required = true
+description = "Manual local path for the downloaded Qwen3-ASR-1.7B model directory."
+
+[pyannote_speaker_diarization]
+path = "models/pyannote/speaker-diarization-community-1"
+required = true
+description = "Manual local path for the downloaded pyannote speaker diarization model directory."

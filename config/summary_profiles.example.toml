@@ -1,0 +1,7 @@
+last_profile = "example"
+
+[[profiles]]
+name = "example"
+base_url = "https://api.example.com/v1"
+model = "example-model"
+encrypted_api_key = ""

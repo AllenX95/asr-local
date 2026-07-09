@@ -1,0 +1,32 @@
+replacement count 59
+283                     subtitle: "\u4e0a\u4f20\u97f3\u9891\u5e76\u751f\u6210\u8f6c\ufffd?;
+290                     subtitle: "\u7f16\u8f91\u4e0e\u6e32\u67d3\u8f6c\u5199\u6587\ufffd?;
+296                     title: "\u5927\u6a21\u578b\ufffd\ufffd\u7ed3";
+304                     subtitle: "\u6a21\u578b\u8def\u5f84\u4e0e\u8fd0\u884c\u72b6\ufffd?;
+315                     text: "\u652f\u6301 pyannote \u8bf4\u8bdd\u4eba\u5206\ufffd?+ Qwen3-ASR \u8f6c\u5199\uff0c\u5e76\u53ef\u8c03\ufffd?OpenAI \u517c\u5bb9 API \u751f\u6210\u603b\u7ed3\ufffd?;
+348                             text: "\u4e0a\u4f20\u672c\u5730\u5f55\u97f3\u6587\u4ef6\uff0c\u6309\u65f6\u95f4\u8f74\u8f93\u51fa\u5e26\u8bf4\u8bdd\u4eba\u6807\u7b7e\u7684 Markdown \u8f6c\u5199\u7ed3\u679c\ufffd?;
+398                                         text: "\u542f\u7528\u8bf4\u8bdd\u4eba\u5206\ufffd?;
+407                                 Text { text: "\u80cc\u666f\u4e0a\u4e0b\ufffd?; font-weight: 700; }
+421                                         placeholder-text: "\u8f93\u5165\u4f1a\u8bae\u6216\u4e1a\u52a1\u80cc\u666f\uff0c\u5e2e\u52a9\u6a21\u578b\u66f4\u51c6\u786e\u5339\u914d\u4eba\u540d\ufffd\ufffd\u4ea7\u54c1\u540d\u548c\u5173\u952e\u672f\u8bed\ufffd\ufffd?;
+448                                         text: root.busy ? "\u52a0\u5165\u961f\u5217" : "\u5f22\ufffd\u59cb\u8f6c\ufffd?;
+476                         Text { text: "\u67e5\u770b\u3001\u7f16\u8f91\u5e76\u4fdd\u5b58\u8f6c\u5199\u5f97\u5230\ufffd?Markdown \u5185\u5bb9\ufffd?; wrap: word-wrap; color: #465062; }
+491                             text: root.markdown_path == "" ? "\u5f53\u524d\u6587\u4ef6\uff1a\u672a\u4fdd\u5b58" : "\u5f53\u524d\u6587\u4ef6\ufffd? + root.markdown_path;
+522                         Text { text: "\u5927\u6a21\u578b\ufffd\ufffd\u7ed3"; font-size: 28px; font-weight: 800; color: #111827; }
+523                         Text { text: "\u4f7f\u7528 OpenAI \u517c\u5bb9 API\uff0c\u5bf9\u5f53\u524d\u8f6c\u5199 Markdown \u8fdb\u884c\u603b\u7ed3\uff0c\u5e76\u652f\u6301 Prompt \u6a21\u677f\ufffd?Markdown \u5bfc\u51fa\ufffd?; wrap: word-wrap; color: #465062; }
+551                                 Text { text: "\u5df2\u4fdd\u5b58\u8fde\u63a5\u914d\ufffd?; font-weight: 700; }
+570                                                 text: "\u5f53\u524d\u8fd8\u6ca1\u6709\u4fdd\u5b58\u8fde\u63a5\u914d\u7f6e\ufffd\ufffd?;
+643                                             Text { text: "\u5df2\u4fdd\u5b58\u6a21\ufffd?; font-weight: 700; }
+663                                                             text: "\u5f53\u524d\u8fd8\u6ca1\u6709\u4fdd\u5b58\u6a21\u677f\ufffd\ufffd?;
+702                                                     placeholder-text: "\u8f93\u5165\u4f60\u81ea\u5df1\u7684\u603b\u7ed3 Prompt\uff0c\u6a21\u578b\u4f1a\u57fa\u4e8e\u5f53\u524d\u8f6c\u5199 Markdown \u8f93\u51fa\u603b\u7ed3\ufffd?;
+736                             text: root.summary_path == "" ? "\u603b\u7ed3\u6587\u4ef6\uff1a\u672a\u4fdd\u5b58" : "\u603b\u7ed3\u6587\u4ef6\ufffd? + root.summary_path;
+746                                 Text { text: "\u603b\u7ed3\u7f16\u8f91\ufffd?; font-size: 22px; font-weight: 800; }
+760                                         placeholder-text: "\u751f\u6210\u7684\ufffd\ufffd\u7ed3 Markdown \u4f1a\u663e\u793a\u5728\u8fd9\u91cc\uff0c\u4f60\u53ef\u4ee5\u7ee7\u7eed\u7f16\u8f91\u540e\u518d\u5bfc\u51fa\ufffd?;
+767                                 Text { text: "\u603b\u7ed3\u9884\u89c8\ufffd?; font-size: 22px; font-weight: 800; }
+777                         Text { text: "\u67e5\u770b\u672c\u5730\u6a21\u578b\u8def\u5f84\u3001\u914d\u7f6e\u6587\u4ef6\u548c\u8fd0\u884c\u72b6\ufffd\ufffd\ufffd\ufffd\u8bed\u97f3\u8f6c\u5199\u9875\u4e0d\u518d\u5c55\u793a\u8fd9\u4e9b\u57fa\u7840\u914d\u7f6e\ufffd?; wrap: word-wrap; color: #465062; }
+795                                         Text { text: "\u8def\u5f84\u6309\u884c\u5c55\u793a\u3002\u8fdb\u5165\u7f16\u8f91\u540e\u53ef\u76f4\u63a5\u4fee\u6539\uff0c\u6216\u70b9\u51fb\u6d4f\u89c8\ufffd\ufffd\u62e9\u6a21\u578b\u6743\u91cd\u76ee\u5f55\ufffd?; color: #5d6f82; wrap: word-wrap; }
+830                                     label: "\u9879\u76ee\u6839\u76ee\ufffd?;
+842                                     label: "\u6a21\u578b\u6839\u76ee\ufffd?;
+858                                     label: "Qwen \u72b6\ufffd\ufffd?;
+872                                     label: "pyannote \u72b6\ufffd\ufffd?;
+902                                     text: "\u6a21\u578b\u6743\u91cd\u4ecd\u6309 config/models.toml \u6307\u5b9a\u8def\u5f84\u8bfb\u53d6\uff1b\u5982\u679c\u4f60\u79fb\u52a8\ufffd?Qwen3-ASR \ufffd?pyannote \u6743\u91cd\uff0c\u66f4\u65b0\u914d\u7f6e\u540e\u70b9\u51fb\u201c\u91cd\u65b0\u52a0\u8f7d\u914d\u7f6e\ufffd\ufffd\ufffd\ufffd?;
+908                                     text: "CUDA\u3001Python worker \ufffd?API \u914d\u7f6e\u7684\u8be6\u7ec6\u8fd0\u884c\u65e5\u5fd7\u4f1a\u5199\u5165 outputs/logs\ufffd?;
