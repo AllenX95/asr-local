@@ -327,6 +327,7 @@ class SupervisorTests(unittest.TestCase):
                 await cancel_supervisor._queue.join()
                 cancel_snapshot = await cancel_supervisor.get(cancel_id)
                 self.assertEqual(cancel_snapshot["status"], "cancelled")
+                self.assertFalse(any(item["kind"] == "transcript_markdown" for item in cancel_snapshot["artifacts"]))
                 self.assertFalse(any(item["kind"] == "final_summary_markdown" for item in cancel_snapshot["artifacts"]))
                 await supervisor.shutdown(interrupt=False)
                 await cancel_supervisor.shutdown(interrupt=False)

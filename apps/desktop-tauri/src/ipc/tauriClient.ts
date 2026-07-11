@@ -19,6 +19,7 @@ import type {
   WorkerUiEvent
 } from './workerTypes';
 import { WORKER_EVENT_NAME } from './workerTypes';
+import { electronBridge } from './desktopBridge';
 
 const isTauriRuntime = () =>
   typeof window !== 'undefined' && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
@@ -28,6 +29,10 @@ function desktopOnly<T>(feature: string): Promise<T> {
 }
 
 function invokeDesktop<T>(command: string, args?: Record<string, unknown>, fallback?: () => T | Promise<T>) {
+  const electron = electronBridge();
+  if (electron) {
+    return electron.invoke<T>(command, args);
+  }
   if (isTauriRuntime()) {
     return invoke<T>(command, args);
   }

@@ -7,7 +7,7 @@ import sys
 from typing import Any
 
 from app.ipc.v2 import ProtocolError, decode_request, encode_event, encode_response
-from app.config import project_root
+from app.config import project_root, state_dir
 from app.workflow.registry import WorkflowRegistry
 from app.workflow.supervisor import WorkflowSupervisor
 from app.workflow.secrets import EphemeralSecretBroker, SecretRequest
@@ -60,7 +60,7 @@ class BrokerSecretProvider:
 
 class V2StdioServer:
     def __init__(self, *, pipeline_mode: str = "auto") -> None:
-        self.registry = WorkflowRegistry(project_root() / "outputs" / ".workflow" / "registry.sqlite3")
+        self.registry = WorkflowRegistry(state_dir() / "registry.sqlite3")
         self.secret_provider = BrokerSecretProvider()
         self.requested_pipeline_mode = pipeline_mode
         self.pipeline_mode = resolve_pipeline_mode(pipeline_mode)
@@ -178,7 +178,10 @@ class V2StdioServer:
         if method == "runtime.hello":
             return {"selected_version": 2}
         if method == "runtime.capabilities":
-            return capabilities()
+            return capabilities(
+                requested_pipeline_mode=self.requested_pipeline_mode,
+                resolved_pipeline_mode=self.pipeline_mode,
+            )
         if method == "prompt.preview":
             return _prompt_preview(params)
         if method == "workflow.submit":
@@ -244,7 +247,7 @@ def capabilities(*, requested_pipeline_mode: str = "auto", resolved_pipeline_mod
             "secret.provide",
             "runtime.shutdown",
         ],
-        "pipeline_profiles": ["moss_transcribe_diarize", "qwen3_asr_with_pyannote"],
+        "pipeline_profiles": ["moss_transcribe_diarize", "qwen3_asr_with_pyannote", "cloud_asr"],
         "max_inflight_workflows": 3,
         "event_recovery": "snapshot_reconcile",
         "secret_transport": "ephemeral_grant",

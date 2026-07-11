@@ -4,6 +4,7 @@ import NavRail from './components/NavRail.vue';
 import { useAppStore } from './stores/appStore';
 import { useWorkflowStore } from './stores/workflowStore';
 import { FakeWorkflowRuntime } from './workflows/adapters/fakeWorkflowRuntime';
+import { ElectronWorkflowRuntime } from './workflows/adapters/electronWorkflowRuntime';
 import { TauriWorkflowRuntime } from './workflows/adapters/tauriWorkflowRuntime';
 
 const store = useAppStore();
@@ -34,7 +35,12 @@ const currentView = computed(() => {
 
 onMounted(() => {
   const isTauri = typeof window !== 'undefined' && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
-  void workflowStore.configure(isTauri ? new TauriWorkflowRuntime() : new FakeWorkflowRuntime());
+  const runtime = window.asrLocal
+    ? new ElectronWorkflowRuntime()
+    : isTauri
+      ? new TauriWorkflowRuntime()
+      : new FakeWorkflowRuntime();
+  void workflowStore.configure(runtime);
   void store.initialize();
 });
 </script>

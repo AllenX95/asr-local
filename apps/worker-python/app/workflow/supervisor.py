@@ -390,6 +390,11 @@ class WorkflowSupervisor:
             await self._publish(event)
             running = transcribing
             transcript_result = await self.transcriber.transcribe(execution_spec, running["attempt"]["attempt_id"])
+            # Blocking model calls cannot always be interrupted safely. Honor
+            # pending control before publishing their result so cancellation
+            # never creates a late transcript artifact.
+            if not await self._wait_for_control(running["workflow_id"]):
+                return
             # Secret waits and user controls can advance the persisted snapshot
             # while the provider/model call is in flight. Rebase before writing
             # the artifact so the registry sequence is never moved backwards.

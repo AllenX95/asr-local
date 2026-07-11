@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import os
 import tomllib
 
 DEFAULT_LOCAL_ASR_MODEL = "moss_transcribe_diarize"
@@ -28,11 +29,22 @@ DEFAULT_PYANNOTE_CONFIG = {
 
 
 def project_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+    configured = os.environ.get("ASR_LOCAL_PROJECT_ROOT", "").strip()
+    return Path(configured).expanduser().resolve() if configured else Path(__file__).resolve().parents[3]
+
+
+def state_dir() -> Path:
+    configured = os.environ.get("ASR_LOCAL_STATE_DIR", "").strip()
+    return Path(configured).expanduser().resolve() if configured else project_root() / "outputs" / ".workflow"
+
+
+def config_dir() -> Path:
+    configured = os.environ.get("ASR_LOCAL_CONFIG_DIR", "").strip()
+    return Path(configured).expanduser().resolve() if configured else project_root() / "config"
 
 
 def config_path() -> Path:
-    return project_root() / "config" / "models.toml"
+    return config_dir() / "models.toml"
 
 
 @dataclass(slots=True)

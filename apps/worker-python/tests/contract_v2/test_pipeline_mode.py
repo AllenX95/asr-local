@@ -7,8 +7,8 @@ from app.supervisor.server import capabilities, resolve_pipeline_mode
 
 
 class PipelineModeTests(unittest.TestCase):
-    def test_capabilities_do_not_advertise_cloud_asr(self) -> None:
-        self.assertNotIn("cloud_asr", capabilities()["pipeline_profiles"])
+    def test_capabilities_advertise_the_implemented_cloud_asr_pipeline(self) -> None:
+        self.assertIn("cloud_asr", capabilities()["pipeline_profiles"])
 
     def test_explicit_modes_are_preserved(self) -> None:
         self.assertEqual(resolve_pipeline_mode("fake"), "fake")

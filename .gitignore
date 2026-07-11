@@ -10,6 +10,8 @@ __pycache__/
 .venv*/
 apps/desktop-tauri/node_modules/
 apps/desktop-tauri/dist/
+apps/desktop-tauri/dist-electron/
+apps/desktop-tauri/release-electron/
 apps/desktop-tauri/src-tauri/target/
 /tmp_rust_check*
 /rmeta*/

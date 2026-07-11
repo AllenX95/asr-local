@@ -1,15 +1,13 @@
 ﻿<script setup lang="ts">
-import { FileAudio2, FileText, History, Settings, Sparkles, Zap } from '@lucide/vue';
+import { FileText, History, Settings, Zap } from '@lucide/vue';
 import { useAppStore } from '../stores/appStore';
 import type { ViewKey } from '../ipc/workerTypes';
 
 const store = useAppStore();
 
-const items: Array<{ key: ViewKey; label: string; icon: typeof FileAudio2 }> = [
+const items: Array<{ key: ViewKey; label: string; icon: typeof FileText }> = [
   { key: 'workflow', label: '一键工作流', icon: Zap },
-  { key: 'workbench', label: '工作台', icon: FileAudio2 },
   { key: 'markdown', label: 'Markdown', icon: FileText },
-  { key: 'summary', label: '总结', icon: Sparkles },
   { key: 'history', label: '历史', icon: History },
   { key: 'settings', label: '设置', icon: Settings }
 ];
@@ -21,7 +19,7 @@ const items: Array<{ key: ViewKey; label: string; icon: typeof FileAudio2 }> = [
       <div class="brand-mark">ASR</div>
       <div>
         <strong>听记助手</strong>
-        <span>Tauri</span>
+        <span>Electron</span>
       </div>
     </div>
     <nav>

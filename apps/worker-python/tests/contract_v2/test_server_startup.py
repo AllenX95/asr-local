@@ -58,6 +58,21 @@ class V2ServerStartupTests(unittest.TestCase):
             finally:
                 server.registry.close()
 
+    def test_runtime_capabilities_report_the_instance_pipeline_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch("app.supervisor.server.project_root", return_value=root), patch(
+                "app.supervisor.server.resolve_pipeline_mode", return_value="fake"
+            ):
+                server = V2StdioServer(pipeline_mode="fake")
+            try:
+                result = asyncio.run(
+                    server._dispatch({"method": "runtime.capabilities", "params": {}})
+                )
+                self.assertEqual(result["pipeline_mode"], {"requested": "fake", "resolved": "fake"})
+            finally:
+                server.registry.close()
+
 
 if __name__ == "__main__":
     unittest.main()
