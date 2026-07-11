@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://asr-local.invalid/contracts/workflow-v2/envelope.schema.json",
+  "title": "ASR Local Workflow v2 Envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "protocol_version", "kind"],
+  "properties": {
+    "protocol": { "const": "asr-local-workflow" },
+    "protocol_version": { "const": 2 },
+    "kind": { "enum": ["request", "response", "event"] },
+    "request_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "operation_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "method": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "params": { "type": "object" },
+    "ok": { "type": "boolean" },
+    "result": {},
+    "error": { "$ref": "error.schema.json" },
+    "event": { "const": "workflow.event" },
+    "payload": { "type": "object" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "request" } } },
+      "then": { "required": ["request_id", "method", "params"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "response" } } },
+      "then": { "required": ["request_id", "ok"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "event" } } },
+      "then": { "required": ["event", "payload"] }
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://asr-local.invalid/contracts/workflow-v2/workflow-draft.schema.json",
+  "title": "WorkflowDraft",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["draft_version", "display_name", "source", "transcription", "summary", "output"],
+  "properties": {
+    "draft_version": { "const": 2 },
+    "display_name": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": { "path": { "type": "string", "minLength": 1 } }
+    },
+    "transcription": { "$ref": "transcription-draft.schema.json" },
+    "summary": { "$ref": "summary-draft.schema.json" },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["directory", "base_name", "collision_policy"],
+      "properties": {
+        "directory": { "type": "string", "minLength": 1 },
+        "base_name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "collision_policy": { "enum": ["reject", "unique_suffix"] }
+      }
+    }
+  }
+}

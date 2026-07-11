@@ -10,6 +10,11 @@ mod summary_profiles;
 mod summary_templates;
 mod worker_client;
 mod worker_contract;
+mod workflow_contract_v2;
+mod workflow_v2_client;
+mod workflow_v2_commands;
+
+use tauri::Manager;
 
 fn main() {
     let project_root = config::project_root();
@@ -44,10 +49,26 @@ fn main() {
             commands::delete_summary_template,
             commands::generate_summary,
             commands::list_history_items,
+            workflow_v2_commands::workflow_v2_capabilities,
+            workflow_v2_commands::workflow_v2_catalogs,
+            workflow_v2_commands::workflow_v2_prompt_preview,
+            workflow_v2_commands::workflow_v2_submit,
+            workflow_v2_commands::workflow_v2_list,
+            workflow_v2_commands::workflow_v2_get,
+            workflow_v2_commands::workflow_v2_control,
+            workflow_v2_commands::workflow_v2_retry,
+            workflow_v2_commands::workflow_v2_register_revision,
+            workflow_v2_commands::workflow_v2_provide_secret,
+            workflow_v2_commands::workflow_v2_shutdown,
         ])
         .setup(|_app| {
             session_log::info("tauri desktop app startup");
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                let _ = workflow_v2_client::shutdown(window.app_handle().clone(), &config::project_root());
+            }
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

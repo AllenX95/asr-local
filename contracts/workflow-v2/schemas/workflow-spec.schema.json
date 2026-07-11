@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://asr-local.invalid/contracts/workflow-v2/workflow-spec.schema.json",
+  "title": "WorkflowSpecSnapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["spec_version", "display_name", "source", "transcription", "summary", "output"],
+  "properties": {
+    "spec_version": { "const": 2 },
+    "display_name": { "type": "string", "minLength": 1 },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "fingerprint"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "fingerprint": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["size_bytes", "modified_ms", "sha256"],
+          "properties": {
+            "size_bytes": { "type": "integer", "minimum": 0 },
+            "modified_ms": { "type": "integer", "minimum": 0 },
+            "sha256": { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
+    "transcription": { "type": "object" },
+    "summary": { "$ref": "summary-draft.schema.json" },
+    "output": { "type": "object" }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "protocol": "asr-local-workflow",
+  "protocol_version": 2,
+  "kind": "response",
+  "request_id": "req_list_001",
+  "ok": true,
+  "result": { "items": [], "next_cursor": null }
+}

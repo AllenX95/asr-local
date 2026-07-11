@@ -1,0 +1,31 @@
+{
+  "protocol": "asr-local-workflow",
+  "protocol_version": 2,
+  "kind": "event",
+  "event": "workflow.event",
+  "payload": {
+    "workflow_id": "wf_001",
+    "attempt_id": "att_001",
+    "sequence": 20,
+    "occurred_at": "2026-07-10T12:06:00Z",
+    "type": "failed",
+    "stage": "summarizing",
+    "data": { "code": "PROVIDER_TIMEOUT" },
+    "state": {
+      "snapshot_version": 2,
+      "workflow_id": "wf_001",
+      "sequence": 20,
+      "spec": {},
+      "status": "failed",
+      "stage": "summarizing",
+      "attempt": { "attempt_id": "att_001", "number": 1, "stage_attempts": { "transcription": 1, "summary": 1, "writing_final": 0 } },
+      "progress": { "stage_ratio": 0.5, "overall_ratio": 0.7, "queue_position": null },
+      "control": { "pending_action": null },
+      "runtime_plan": null,
+      "artifacts": [],
+      "recovery": { "recommended_retry_stage": "summarizing", "interrupted_attempt_id": null },
+      "last_error": { "code": "PROVIDER_TIMEOUT", "message": "Provider timed out.", "retryable": true, "field_errors": [], "details": {}, "diagnostic_id": "diag_timeout_001" },
+      "timestamps": { "created_at": "2026-07-10T12:00:00Z", "updated_at": "2026-07-10T12:06:00Z", "started_at": "2026-07-10T12:00:03Z", "completed_at": null }
+    }
+  }
+}

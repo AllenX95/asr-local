@@ -32,11 +32,32 @@ def _status_for(path: Path, required: bool, description: str) -> ModelPathStatus
     )
 
 
+def _torch_runtime_snapshot() -> dict:
+    if not _module_available("torch"):
+        return {"available": False}
+    try:
+        import torch
+    except Exception as exc:
+        return {"available": False, "error": str(exc)}
+
+    cuda_available = bool(torch.cuda.is_available())
+    return {
+        "available": True,
+        "cuda_available": cuda_available,
+        "selected_device": "cuda:0" if cuda_available else "cpu",
+        "cuda_device_count": torch.cuda.device_count() if cuda_available else 0,
+        "cuda_device_name": (
+            torch.cuda.get_device_name(0) if cuda_available else None
+        ),
+    }
+
+
 def environment_snapshot() -> dict:
     models = load_models_config()
     root = project_root()
 
     qwen_path = models.qwen3_asr_1_7b.resolved_path(root)
+    moss_path = models.moss_transcribe_diarize.resolved_path(root)
     pyannote_path = models.pyannote_speaker_diarization.resolved_path(root)
 
     return {
@@ -50,12 +71,21 @@ def environment_snapshot() -> dict:
             "pyannote.audio": _module_available("pyannote.audio"),
             "cloud_asr_stdlib_client": True,
         },
+        "torch_runtime": _torch_runtime_snapshot(),
         "models": {
+            "active_local_asr_model": models.active_local_asr_model,
             "qwen3_asr_1_7b": asdict(
                 _status_for(
                     qwen_path,
                     models.qwen3_asr_1_7b.required,
                     models.qwen3_asr_1_7b.description,
+                )
+            ),
+            "moss_transcribe_diarize": asdict(
+                _status_for(
+                    moss_path,
+                    models.moss_transcribe_diarize.required,
+                    models.moss_transcribe_diarize.description,
                 )
             ),
             "pyannote_speaker_diarization": asdict(

@@ -1,0 +1,1 @@
+{"type":"health_check_ok","payload":{"contract_version":"worker-contract-v1","supported_commands":["health_check","run_job","shutdown"]}}

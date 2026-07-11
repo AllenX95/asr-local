@@ -1,0 +1,8 @@
+{
+  "protocol": "asr-local-workflow",
+  "protocol_version": 2,
+  "kind": "response",
+  "request_id": "req_prompt_001",
+  "ok": true,
+  "result": { "compiler_id": "moss-prompt", "compiler_version": 1, "base_template_version": "openmoss-official-2026-07-09", "compiled_text": "MOSS official output format", "sha256": "hex-digest", "warnings": [] }
+}

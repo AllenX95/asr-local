@@ -1,0 +1,18 @@
+{
+  "protocol": "asr-local-workflow",
+  "protocol_version": 2,
+  "kind": "request",
+  "request_id": "req_revision_001",
+  "operation_id": "op_revision_001",
+  "method": "artifact.register_revision",
+  "params": {
+    "workflow_id": "wf_001",
+    "expected_attempt_id": "att_001",
+    "expected_sequence": 24,
+    "source_artifact_id": "transcript-artifact-001",
+    "kind": "transcript_markdown",
+    "staged_path": "D:\\outputs\\customer-interview--wf_001\\.staging\\edit-001.md",
+    "size_bytes": 18320,
+    "sha256": "hex-digest"
+  }
+}

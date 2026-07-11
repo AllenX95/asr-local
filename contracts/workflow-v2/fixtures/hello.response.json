@@ -1,0 +1,14 @@
+{
+  "protocol": "asr-local-workflow",
+  "protocol_version": 2,
+  "kind": "response",
+  "request_id": "req_hello_001",
+  "ok": true,
+  "result": {
+    "selected_version": 2,
+    "worker_instance_id": "worker-001",
+    "store_instance_id": "store-001",
+    "runtime_version": "0.2.0",
+    "capabilities": { "methods": ["runtime.capabilities", "workflow.submit", "workflow.list", "workflow.get", "workflow.control", "workflow.retry", "artifact.register_revision", "secret.provide", "runtime.shutdown"], "max_inflight_workflows": 3 }
+  }
+}

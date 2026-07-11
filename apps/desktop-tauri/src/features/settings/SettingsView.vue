@@ -2,13 +2,16 @@
 import { computed, reactive, watch } from 'vue';
 import { Save, Stethoscope, Trash2 } from '@lucide/vue';
 import { useAppStore } from '../../stores/appStore';
-import type { AsrCloudProfile, SummaryProfile } from '../../ipc/workerTypes';
+import type { AsrCloudProfile, LocalAsrModelKey, SummaryProfile } from '../../ipc/workerTypes';
 
 const store = useAppStore();
+const cloudAsrEnabled = false;
 
 const modelDraft = reactive({
   modelRoot: '',
+  activeLocalAsrModel: 'moss_transcribe_diarize' as LocalAsrModelKey,
   qwenPath: '',
+  mossPath: '',
   pyannotePath: ''
 });
 
@@ -38,7 +41,9 @@ watch(
       return;
     }
     modelDraft.modelRoot = models.raw.model_root;
+    modelDraft.activeLocalAsrModel = models.raw.active_local_asr_model;
     modelDraft.qwenPath = models.raw.qwen3_asr_1_7b.path;
+    modelDraft.mossPath = models.raw.moss_transcribe_diarize.path;
     modelDraft.pyannotePath = models.raw.pyannote_speaker_diarization.path;
   },
   { immediate: true }
@@ -102,7 +107,11 @@ const healthRows = computed(() =>
       <section class="settings-section">
         <header class="panel-header compact">
           <h2>模型路径</h2>
-          <button class="primary" type="button" @click="store.saveModelPaths(modelDraft.modelRoot, modelDraft.qwenPath, modelDraft.pyannotePath)">
+          <button
+            class="primary"
+            type="button"
+            @click="store.saveModelPaths(modelDraft.modelRoot, modelDraft.activeLocalAsrModel, modelDraft.qwenPath, modelDraft.mossPath, modelDraft.pyannotePath)"
+          >
             <Save :size="16" />
             保存
           </button>
@@ -112,10 +121,24 @@ const healthRows = computed(() =>
           <input v-model="modelDraft.modelRoot" type="text" />
         </label>
         <label>
+          <span>本地 ASR 模型</span>
+          <select v-model="modelDraft.activeLocalAsrModel">
+            <option value="qwen3_asr_1_7b">Qwen3-ASR-1.7B</option>
+            <option value="moss_transcribe_diarize">MOSS-Transcribe-Diarize 0.9B</option>
+          </select>
+        </label>
+        <label>
           <span>Qwen3-ASR</span>
           <input v-model="modelDraft.qwenPath" type="text" />
           <small :class="{ ok: store.settings.models?.qwen_exists }">
             {{ store.settings.models?.qwen_exists ? '路径存在' : '路径未检测到' }}
+          </small>
+        </label>
+        <label>
+          <span>MOSS-Transcribe-Diarize</span>
+          <input v-model="modelDraft.mossPath" type="text" />
+          <small :class="{ ok: store.settings.models?.moss_exists }">
+            {{ store.settings.models?.moss_exists ? '路径存在' : '路径未检测到' }}
           </small>
         </label>
         <label>
@@ -146,7 +169,7 @@ const healthRows = computed(() =>
     </div>
 
     <div class="panel form-panel">
-      <section class="settings-section">
+      <section v-if="cloudAsrEnabled" class="settings-section">
         <header class="panel-header compact">
           <h2>云端 ASR Profile</h2>
           <div class="toolbar">

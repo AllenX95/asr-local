@@ -1,0 +1,31 @@
+{
+  "protocol": "asr-local-workflow",
+  "protocol_version": 2,
+  "kind": "event",
+  "event": "workflow.event",
+  "payload": {
+    "workflow_id": "wf_001",
+    "attempt_id": "att_001",
+    "sequence": 30,
+    "occurred_at": "2026-07-10T12:08:00Z",
+    "type": "completed",
+    "stage": "completed",
+    "data": {},
+    "state": {
+      "snapshot_version": 2,
+      "workflow_id": "wf_001",
+      "sequence": 30,
+      "spec": {},
+      "status": "completed",
+      "stage": "completed",
+      "attempt": { "attempt_id": "att_001", "number": 1, "stage_attempts": { "transcription": 1, "summary": 1, "writing_final": 1 } },
+      "progress": { "stage_ratio": 1, "overall_ratio": 1, "queue_position": null },
+      "control": { "pending_action": null },
+      "runtime_plan": null,
+      "artifacts": [],
+      "recovery": { "recommended_retry_stage": null, "interrupted_attempt_id": null },
+      "last_error": null,
+      "timestamps": { "created_at": "2026-07-10T12:00:00Z", "updated_at": "2026-07-10T12:08:00Z", "started_at": "2026-07-10T12:00:03Z", "completed_at": "2026-07-10T12:08:00Z" }
+    }
+  }
+}

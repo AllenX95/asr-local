@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://asr-local.invalid/contracts/workflow-v2/transcription-draft.schema.json",
+  "title": "TranscriptionDraft",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["pipeline_profile", "pipeline_profile_version", "device_policy", "language", "prompt_input", "postprocess", "cloud_profile"],
+  "properties": {
+    "pipeline_profile": { "enum": ["moss_transcribe_diarize", "qwen3_asr_with_pyannote", "cloud_asr"] },
+    "pipeline_profile_version": { "type": "integer", "minimum": 1 },
+    "device_policy": { "enum": ["auto", "cpu", "cuda"] },
+    "audio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["channel_strategy"],
+      "properties": {
+        "channel_strategy": { "enum": ["mixdown", "split_stereo"] }
+      }
+    },
+    "language": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "value"],
+      "properties": {
+        "mode": { "enum": ["auto", "fixed"] },
+        "value": { "type": ["string", "null"] }
+      }
+    },
+    "prompt_input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recording_background", "hotwords", "extra_instruction"],
+      "properties": {
+        "recording_background": { "type": "string", "maxLength": 4000 },
+        "hotwords": { "type": "array", "maxItems": 200, "items": { "type": "string", "minLength": 1, "maxLength": 64 } },
+        "extra_instruction": { "type": "string", "maxLength": 1000 }
+      }
+    },
+    "postprocess": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["replacements", "keep_fillers", "auto_punctuation"],
+      "properties": {
+        "replacements": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["wrong", "correct"],
+            "properties": {
+              "wrong": { "type": "string", "minLength": 1 },
+              "correct": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "keep_fillers": { "type": "boolean" },
+        "auto_punctuation": { "type": "boolean" }
+      }
+    },
+    "cloud_profile": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["profile_id", "profile_version", "base_url", "auth_mode", "model", "credential_ref", "provider_binding_sha256"],
+      "properties": {
+        "profile_id": { "type": "string", "minLength": 1 },
+        "profile_version": { "type": "integer", "minimum": 1 },
+        "base_url": { "type": "string", "minLength": 1 },
+        "auth_mode": { "enum": ["none", "bearer"] },
+        "model": { "type": "string", "minLength": 1 },
+        "credential_ref": { "type": ["string", "null"] },
+        "provider_binding_sha256": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

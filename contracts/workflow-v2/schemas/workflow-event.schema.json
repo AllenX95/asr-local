@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://asr-local.invalid/contracts/workflow-v2/workflow-event.schema.json",
+  "title": "WorkflowEvent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["workflow_id", "attempt_id", "sequence", "occurred_at", "type", "stage", "data", "state"],
+  "properties": {
+    "workflow_id": { "type": "string", "minLength": 1 },
+    "attempt_id": { "type": "string", "minLength": 1 },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "occurred_at": { "type": "string", "minLength": 1 },
+    "caused_by_operation_id": { "type": ["string", "null"] },
+    "type": { "type": "string", "minLength": 1 },
+    "stage": { "type": ["string", "null"] },
+    "data": { "type": "object" },
+    "state": { "$ref": "workflow-snapshot.schema.json" }
+  }
+}

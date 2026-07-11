@@ -53,25 +53,6 @@ const store = useAppStore();
         </label>
       </div>
 
-      <div class="two-col">
-        <label>
-          <span>ASR 后端</span>
-          <select v-model="store.workbench.asrBackend">
-            <option value="local">本地模型</option>
-            <option value="cloud">云端 API</option>
-          </select>
-        </label>
-        <label>
-          <span>云端 Profile</span>
-          <select v-model="store.workbench.asrProfileName" :disabled="store.workbench.asrBackend !== 'cloud'">
-            <option value="">未选择</option>
-            <option v-for="profile in store.asrProfiles.profiles" :key="profile.name" :value="profile.name">
-              {{ profile.name }} · {{ profile.model }}
-            </option>
-          </select>
-        </label>
-      </div>
-
       <div class="option-strip">
         <label>
           <span>语言模式</span>

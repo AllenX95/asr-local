@@ -1,70 +1,272 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from functools import lru_cache
+import os
 from pathlib import Path
 import shutil
 import subprocess
+from typing import Literal
 
 import numpy as np
 
 
 TARGET_SR = 16_000
+AudioChannelStrategy = Literal["mixdown", "split_stereo"]
+
+
+@dataclass(slots=True)
+class NormalizedAudioStream:
+    label: str
+    audio: np.ndarray
+    sample_rate: int
+    wav_path: Path
+
+
+@dataclass(slots=True)
+class NormalizedAudio:
+    source_path: Path
+    channel_strategy: AudioChannelStrategy
+    resampler: str
+    streams: list[NormalizedAudioStream]
 
 
 def load_and_normalize_audio(source_path: Path, normalized_wav_path: Path) -> tuple[np.ndarray, int, str]:
-    normalized_wav_path.parent.mkdir(parents=True, exist_ok=True)
+    """Compatibility wrapper for callers that require one mixed mono stream."""
+    normalized = _normalize_audio(
+        source_path,
+        channel_strategy="mixdown",
+        output_paths=[normalized_wav_path],
+    )
+    stream = normalized.streams[0]
+    return stream.audio, stream.sample_rate, "ffmpeg"
 
-    ffmpeg = shutil.which("ffmpeg")
-    if ffmpeg is None:
-        try:
-            import imageio_ffmpeg
-        except ModuleNotFoundError:
-            imageio_ffmpeg = None
 
-        if imageio_ffmpeg is not None:
-            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+def normalize_audio(
+    source_path: Path,
+    output_dir: Path,
+    *,
+    channel_strategy: AudioChannelStrategy = "mixdown",
+) -> NormalizedAudio:
+    """Create model-ready PCM WAV stream(s) while preserving the original input.
 
-    if ffmpeg:
+    ``mixdown`` is the normal speech-recognition path. ``split_stereo`` keeps
+    left and right stereo tracks independent so dual-mono recorder inputs can
+    be transcribed separately by pipelines that support it.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if channel_strategy == "mixdown":
+        paths = [output_dir / "normalized.wav"]
+    elif channel_strategy == "split_stereo":
+        paths = [output_dir / "channel-1.wav", output_dir / "channel-2.wav"]
+    else:
+        raise ValueError(f"Unsupported audio channel strategy: {channel_strategy}")
+
+    return _normalize_audio(
+        source_path,
+        channel_strategy=channel_strategy,
+        output_paths=paths,
+    )
+
+
+def _normalize_audio(
+    source_path: Path,
+    *,
+    channel_strategy: AudioChannelStrategy,
+    output_paths: list[Path],
+) -> NormalizedAudio:
+    if not source_path.is_file():
+        raise FileNotFoundError(f"audio source does not exist: {source_path}")
+
+    try:
         import soundfile as sf
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("Audio normalization requires the soundfile package.") from exc
 
-        command = [
-            ffmpeg,
-            "-y",
-            "-i",
-            str(source_path),
+    for output_path in output_paths:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    ffmpeg = resolve_ffmpeg_executable()
+    resampler, resample_filter = _resampler_filter(ffmpeg)
+    if channel_strategy == "mixdown":
+        command = _ffmpeg_prefix(ffmpeg, source_path) + [
+            "-map",
+            "0:a:0",
             "-vn",
+            "-sn",
+            "-dn",
+            "-af",
+            resample_filter,
             "-ac",
             "1",
-            "-ar",
-            str(TARGET_SR),
-            str(normalized_wav_path),
+            "-c:a",
+            "pcm_s16le",
+            "-f",
+            "wav",
+            str(output_paths[0]),
         ]
+        _run_ffmpeg(command, source_path, output_paths)
+        streams = [_read_normalized_stream(sf, output_paths[0], "Mixed")]
+    elif channel_strategy == "split_stereo":
+        command = _ffmpeg_prefix(ffmpeg, source_path) + [
+            "-filter_complex",
+            (
+                f"[0:a:0]pan=mono|c0=c0,{resample_filter}[left];"
+                f"[0:a:0]pan=mono|c0=c1,{resample_filter}[right]"
+            ),
+            "-map",
+            "[left]",
+            "-c:a",
+            "pcm_s16le",
+            "-f",
+            "wav",
+            str(output_paths[0]),
+            "-map",
+            "[right]",
+            "-c:a",
+            "pcm_s16le",
+            "-f",
+            "wav",
+            str(output_paths[1]),
+        ]
+        _run_ffmpeg(command, source_path, output_paths)
+        streams = [
+            _read_normalized_stream(sf, output_paths[0], "Channel 1"),
+            _read_normalized_stream(sf, output_paths[1], "Channel 2"),
+        ]
+        _validate_distinct_stereo_channels(streams)
+    else:  # pragma: no cover - validated by normalize_audio
+        raise ValueError(f"Unsupported audio channel strategy: {channel_strategy}")
+
+    return NormalizedAudio(
+        source_path=source_path,
+        channel_strategy=channel_strategy,
+        resampler=resampler,
+        streams=streams,
+    )
+
+
+def _ffmpeg_prefix(ffmpeg: str, source_path: Path) -> list[str]:
+    return [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-y",
+        "-i",
+        str(source_path),
+    ]
+
+
+def _run_ffmpeg(command: list[str], source_path: Path, output_paths: list[Path]) -> None:
+    try:
         completed = subprocess.run(
             command,
             stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            check=False,
+            text=True,
+        )
+    except OSError as exc:
+        raise RuntimeError(f"Failed to start ffmpeg at {command[0]}: {exc}") from exc
+
+    if completed.returncode != 0 or any(not path.is_file() for path in output_paths):
+        detail = (completed.stderr or "").strip()
+        raise RuntimeError(
+            f"ffmpeg could not decode audio source {source_path}: {detail or f'exit code {completed.returncode}'}"
+        )
+
+
+def _read_normalized_stream(sf, wav_path: Path, label: str) -> NormalizedAudioStream:
+    audio, sample_rate = sf.read(wav_path, always_2d=False)
+    audio = _ensure_float32_mono(audio)
+    if sample_rate != TARGET_SR:
+        raise RuntimeError(
+            f"ffmpeg normalization returned {sample_rate} Hz instead of {TARGET_SR} Hz for {wav_path}"
+        )
+    return NormalizedAudioStream(
+        label=label,
+        audio=audio,
+        sample_rate=sample_rate,
+        wav_path=wav_path,
+    )
+
+
+def _validate_distinct_stereo_channels(streams: list[NormalizedAudioStream]) -> None:
+    left, right = streams
+    if len(left.audio) != len(right.audio):
+        raise RuntimeError("ffmpeg returned mismatched split-channel lengths.")
+    if not np.any(np.abs(right.audio) > 1e-6):
+        raise ValueError("split_stereo requires a stereo source with an audible right channel.")
+    if np.allclose(left.audio, right.audio, rtol=1e-5, atol=1e-6):
+        raise ValueError("split_stereo requires two distinct stereo channels; use mixdown for mono audio.")
+
+
+@lru_cache(maxsize=8)
+def _resampler_filter(ffmpeg: str) -> tuple[str, str]:
+    soxr_filter = f"aresample={TARGET_SR}:resampler=soxr:precision=28:cheby=0"
+    try:
+        completed = subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=48000:cl=mono",
+                "-t",
+                "0.01",
+                "-af",
+                soxr_filter,
+                "-f",
+                "null",
+                "-",
+            ],
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
+            text=True,
         )
-        if completed.returncode == 0 and normalized_wav_path.exists():
-            audio, sample_rate = sf.read(normalized_wav_path, always_2d=False)
-            audio = _ensure_float32_mono(audio)
-            return audio, sample_rate, "ffmpeg"
+    except OSError:
+        completed = None
+
+    if completed is not None and completed.returncode == 0:
+        return "soxr", soxr_filter
+    return "swr", f"aresample={TARGET_SR}:filter_size=64:phase_shift=10:cutoff=0.97"
+
+
+def resolve_ffmpeg_executable() -> str:
+    """Locate the configured, system, or packaged ffmpeg executable."""
+    configured = os.environ.get("ASR_LOCAL_FFMPEG", "").strip()
+    if configured:
+        resolved = shutil.which(configured) or (configured if Path(configured).is_file() else None)
+        if resolved:
+            return resolved
+        raise RuntimeError(
+            f"ASR_LOCAL_FFMPEG does not point to an executable ffmpeg binary: {configured}"
+        )
+
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg:
+        return ffmpeg
 
     try:
-        import librosa
-        import soundfile as sf
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "Audio decoding requires ffmpeg, or both librosa and soundfile installed."
-        ) from exc
+        import imageio_ffmpeg
+    except ModuleNotFoundError:
+        imageio_ffmpeg = None
 
-    audio, sample_rate = librosa.load(
-        str(source_path),
-        sr=TARGET_SR,
-        mono=True,
+    if imageio_ffmpeg is not None:
+        candidate = imageio_ffmpeg.get_ffmpeg_exe()
+        if candidate and Path(candidate).is_file():
+            return candidate
+
+    raise RuntimeError(
+        "Audio normalization requires ffmpeg. Install the moss-native runtime, "
+        "install ffmpeg on PATH, or set ASR_LOCAL_FFMPEG to its executable path."
     )
-    audio = np.asarray(audio, dtype=np.float32)
-    sf.write(normalized_wav_path, audio, sample_rate)
-    return audio, sample_rate, "librosa"
 
 
 def audio_duration_ms(audio: np.ndarray, sample_rate: int) -> int:

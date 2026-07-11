@@ -1,0 +1,56 @@
+{
+  "protocol": "asr-local-workflow",
+  "protocol_version": 2,
+  "kind": "request",
+  "request_id": "req_submit_001",
+  "operation_id": "op_submit_001",
+  "method": "workflow.submit",
+  "params": {
+    "draft": {
+      "draft_version": 2,
+      "display_name": "客户访谈 2026-07-10",
+      "source": { "path": "D:\\recordings\\customer-interview.wav" },
+      "transcription": {
+        "pipeline_profile": "moss_transcribe_diarize",
+        "pipeline_profile_version": 1,
+        "device_policy": "auto",
+        "language": { "mode": "auto", "value": null },
+        "prompt_input": {
+          "recording_background": "客户访谈，讨论 ASR Local 产品使用情况。",
+          "hotwords": ["MOSS", "ASR Local"],
+          "extra_instruction": ""
+        },
+        "postprocess": {
+          "replacements": [{ "wrong": "ASRLocal", "correct": "ASR Local" }],
+          "keep_fillers": true,
+          "auto_punctuation": true
+        },
+        "cloud_profile": null
+      },
+      "summary": {
+        "profile_id": "summary-profile-uuid",
+        "profile_version": 4,
+        "base_url": "https://example.com/v1",
+        "auth_mode": "bearer",
+        "model": "summary-model-name",
+        "model_source": "profile_default",
+        "credential_ref": "credential://summary/summary-profile-uuid",
+        "provider_binding_sha256": "hex-digest",
+        "template": {
+          "id": "summary-template-uuid",
+          "version": 3,
+          "name": "客户访谈",
+          "prompt_snapshot": "请根据转录稿生成结构化客户访谈纪要。"
+        },
+        "context_strategy": "auto",
+        "input_token_budget": 100000,
+        "max_output_tokens": 8192
+      },
+      "output": {
+        "directory": "D:\\outputs",
+        "base_name": "customer-interview",
+        "collision_policy": "unique_suffix"
+      }
+    }
+  }
+}

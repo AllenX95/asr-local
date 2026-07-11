@@ -1,0 +1,8 @@
+{
+  "protocol": "asr-local-workflow",
+  "protocol_version": 2,
+  "kind": "response",
+  "request_id": "req_get_001",
+  "ok": true,
+  "result": { "snapshot": {}, "timeline": [], "attempt_history": [] }
+}

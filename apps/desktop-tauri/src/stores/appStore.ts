@@ -7,6 +7,7 @@ import type {
   AsrProfilesState,
   HistoryItem,
   JobResult,
+  LocalAsrModelKey,
   ModelsConfig,
   ReplacementRule,
   RunJobRequest,
@@ -124,7 +125,7 @@ const defaultWorkbench = (): WorkbenchState => ({
 
 export const useAppStore = defineStore('app', {
   state: (): AppState => ({
-    activeView: 'workbench',
+    activeView: 'workflow',
     initialized: false,
     initializing: false,
     submitting: false,
@@ -295,8 +296,8 @@ export const useAppStore = defineStore('app', {
         source_path: sourcePath,
         output_dir: outputDir,
         output_file_name: outputFileName,
-        asr_backend: this.workbench.asrBackend,
-        cloud_asr_profile: asrProfile,
+        asr_backend: 'local',
+        cloud_asr_profile: null,
         language_mode: this.workbench.languageMode,
         fixed_language:
           this.workbench.languageMode === 'fixed' ? this.workbench.fixedLanguage.trim() || null : null,
@@ -561,9 +562,21 @@ export const useAppStore = defineStore('app', {
       }
     },
 
-    async saveModelPaths(modelRoot: string, qwenPath: string, pyannotePath: string) {
+    async saveModelPaths(
+      modelRoot: string,
+      activeLocalAsrModel: LocalAsrModelKey,
+      qwenPath: string,
+      mossPath: string,
+      pyannotePath: string
+    ) {
       try {
-        this.settings.models = await api.saveModelPaths(modelRoot, qwenPath, pyannotePath);
+        this.settings.models = await api.saveModelPaths(
+          modelRoot,
+          activeLocalAsrModel,
+          qwenPath,
+          mossPath,
+          pyannotePath
+        );
         this.setStatus('模型配置已保存', this.settings.models.config_path);
       } catch (error) {
         this.setError('模型配置保存失败', error);

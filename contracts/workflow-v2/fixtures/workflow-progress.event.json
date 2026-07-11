@@ -1,0 +1,41 @@
+{
+  "protocol": "asr-local-workflow",
+  "protocol_version": 2,
+  "kind": "event",
+  "event": "workflow.event",
+  "payload": {
+    "workflow_id": "wf_001",
+    "attempt_id": "att_001",
+    "sequence": 2,
+    "occurred_at": "2026-07-10T12:00:03Z",
+    "caused_by_operation_id": "op_submit_001",
+    "type": "attempt_started",
+    "stage": "preparing",
+    "data": {},
+    "state": {
+      "snapshot_version": 2,
+      "workflow_id": "wf_001",
+      "sequence": 2,
+      "spec": {},
+      "status": "running",
+      "stage": "preparing",
+      "attempt": {
+        "attempt_id": "att_001",
+        "number": 1,
+        "stage_attempts": { "transcription": 1, "summary": 0, "writing_final": 0 }
+      },
+      "progress": { "stage_ratio": 0.05, "overall_ratio": 0.02, "queue_position": null },
+      "control": { "pending_action": null },
+      "runtime_plan": { "resolved_device": "cpu", "dtype": "float32", "workflow_capacity": 3, "asr_inference_capacity": 1, "model_replicas": 1, "reason": "cuda_unavailable", "warnings": [] },
+      "artifacts": [],
+      "recovery": { "recommended_retry_stage": null, "interrupted_attempt_id": null },
+      "last_error": null,
+      "timestamps": {
+        "created_at": "2026-07-10T12:00:00Z",
+        "updated_at": "2026-07-10T12:00:03Z",
+        "started_at": "2026-07-10T12:00:03Z",
+        "completed_at": null
+      }
+    }
+  }
+}

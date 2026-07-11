@@ -1,0 +1,15 @@
+{
+  "protocol": "asr-local-workflow",
+  "protocol_version": 2,
+  "kind": "request",
+  "request_id": "req_retry_001",
+  "operation_id": "op_retry_001",
+  "method": "workflow.retry",
+  "params": {
+    "workflow_id": "wf_001",
+    "expected_attempt_id": "att_001",
+    "expected_sequence": 24,
+    "from_stage": "summarizing",
+    "input_artifact_id": "transcript-artifact-001"
+  }
+}

@@ -16,8 +16,9 @@ use std::time::UNIX_EPOCH;
 use tauri::AppHandle;
 
 const SUPPORTED_AUDIO_EXTENSIONS: &[&str] = &[
-    "wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma", "webm", "mp4", "3gp", "amr",
-    "aiff", "aif", "caf", "mka", "mkv", "mov",
+    "wav", "mp3", "mp2", "m4a", "m4b", "aac", "flac", "ogg", "oga", "opus", "wma", "webm",
+    "mp4", "m4v", "3gp", "3g2", "amr", "aiff", "aif", "caf", "mka", "mkv", "mov", "ac3",
+    "eac3", "ape",
 ];
 
 type CommandResult<T> = Result<T, String>;
@@ -134,10 +135,19 @@ pub fn load_models_config() -> CommandResult<ResolvedModelsConfig> {
 #[tauri::command]
 pub fn save_model_paths(
     model_root: String,
+    active_local_asr_model: Option<String>,
     qwen_path: String,
+    moss_path: Option<String>,
     pyannote_path: String,
 ) -> CommandResult<ResolvedModelsConfig> {
-    config::save_model_paths(model_root, qwen_path, pyannote_path).map_err(format_anyhow)
+    config::save_model_paths(
+        model_root,
+        active_local_asr_model,
+        qwen_path,
+        moss_path,
+        pyannote_path,
+    )
+    .map_err(format_anyhow)
 }
 
 #[tauri::command]

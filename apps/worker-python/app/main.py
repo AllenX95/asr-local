@@ -142,12 +142,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser = argparse.ArgumentParser(description="Local ASR worker skeleton")
     parser.add_argument("--health-check", action="store_true", help="Print a JSON health snapshot and exit.")
+    parser.add_argument("--contract", choices=("v1", "v2"), default="v1", help="Select the worker protocol. v1 remains the default during migration.")
+    parser.add_argument(
+        "--pipeline-mode",
+        choices=("auto", "fake", "production"),
+        default="auto",
+        help="Select v2 auto/fake/production adapters. v1 ignores this option.",
+    )
     args = parser.parse_args(argv)
 
     if args.health_check:
         LOGGER.info("health check CLI mode")
         sys.stdout.write(encode_message("health_check_ok", health_payload()) + "\n")
         return 0
+
+    if args.contract == "v2":
+        from app.supervisor.server import run_v2_stdio
+
+        return run_v2_stdio(pipeline_mode=args.pipeline_mode)
 
     return run_stdio_server()
 

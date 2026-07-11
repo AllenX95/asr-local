@@ -1,0 +1,12 @@
+{
+  "protocol": "asr-local-workflow",
+  "protocol_version": 2,
+  "kind": "request",
+  "request_id": "req_prompt_001",
+  "method": "prompt.preview",
+  "params": {
+    "pipeline_profile": "moss_transcribe_diarize",
+    "language": { "mode": "auto", "value": null },
+    "prompt_input": { "recording_background": "产品评审会议", "hotwords": ["MOSS"], "extra_instruction": "" }
+  }
+}

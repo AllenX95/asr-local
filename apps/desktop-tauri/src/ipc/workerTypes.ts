@@ -1,6 +1,6 @@
 export const WORKER_EVENT_NAME = 'worker-event';
 
-export type ViewKey = 'workbench' | 'markdown' | 'summary' | 'history' | 'settings';
+export type ViewKey = 'workflow' | 'workbench' | 'markdown' | 'summary' | 'history' | 'settings';
 
 export interface ReplacementRule {
   wrong: string;
@@ -8,8 +8,11 @@ export interface ReplacementRule {
 }
 
 export type AsrBackend = 'local' | 'cloud';
+export type LocalAsrModelKey = 'qwen3_asr_1_7b' | 'moss_transcribe_diarize';
 
 export interface AsrCloudProfile {
+  id?: string;
+  version?: number;
   name: string;
   base_url: string;
   model: string;
@@ -109,12 +112,17 @@ export interface ModelsConfig {
   config_path: string;
   raw: {
     model_root: string;
+    active_local_asr_model: LocalAsrModelKey;
     qwen3_asr_1_7b: LocalModelConfig;
+    moss_transcribe_diarize: LocalModelConfig;
     pyannote_speaker_diarization: LocalModelConfig;
   };
+  active_local_asr_model: LocalAsrModelKey;
   qwen_path: string;
+  moss_path: string;
   pyannote_path: string;
   qwen_exists: boolean;
+  moss_exists: boolean;
   pyannote_exists: boolean;
 }
 
@@ -125,6 +133,8 @@ export interface LocalModelConfig {
 }
 
 export interface SummaryProfile {
+  id?: string;
+  version?: number;
   name: string;
   base_url: string;
   model: string;
@@ -137,8 +147,32 @@ export interface SummaryProfilesState {
 }
 
 export interface SummaryTemplate {
+  id?: string;
+  version?: number;
   name: string;
   prompt: string;
+}
+
+export interface WorkflowSummaryProfile {
+  id: string;
+  version: number;
+  name: string;
+  base_url: string;
+  model: string;
+  auth_mode: 'none' | 'bearer';
+  provider_binding_sha256: string;
+}
+
+export interface WorkflowSummaryTemplate {
+  id: string;
+  version: number;
+  name: string;
+  prompt: string;
+}
+
+export interface WorkflowCatalogs {
+  summary_profiles: WorkflowSummaryProfile[];
+  summary_templates: WorkflowSummaryTemplate[];
 }
 
 export interface SummaryRequest {

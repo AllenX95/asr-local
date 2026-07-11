@@ -6,6 +6,10 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AsrCloudProfile {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default = "default_profile_version")]
+    pub version: u32,
     pub name: String,
     pub base_url: String,
     pub model: String,
@@ -21,6 +25,10 @@ pub struct AsrProfilesState {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct StoredAsrCloudProfile {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default = "default_profile_version")]
+    pub version: u32,
     pub name: String,
     #[serde(default)]
     pub base_url: String,
@@ -54,6 +62,8 @@ pub fn load_profiles(project_root: &Path) -> Result<AsrProfilesState> {
         .into_iter()
         .map(|profile| {
             Ok(AsrCloudProfile {
+                id: if profile.id.trim().is_empty() { stable_profile_id(&profile.name) } else { profile.id },
+                version: profile.version.max(1),
                 name: profile.name,
                 base_url: profile.base_url,
                 model: profile.model,
@@ -75,7 +85,17 @@ pub fn upsert_profile(project_root: &Path, profile: &AsrCloudProfile) -> Result<
         bail!("profile name is empty");
     }
 
+    let existing = state
+        .profiles
+        .iter()
+        .find(|item| item.name.eq_ignore_ascii_case(normalized_name));
     let normalized = AsrCloudProfile {
+        id: if profile.id.trim().is_empty() {
+            existing.map(|item| item.id.clone()).unwrap_or_else(|| stable_profile_id(normalized_name))
+        } else {
+            profile.id.trim().to_string()
+        },
+        version: existing.map(|item| item.version.saturating_add(1)).unwrap_or_else(|| profile.version.max(1)),
         name: normalized_name.to_string(),
         base_url: profile.base_url.trim().to_string(),
         model: profile.model.trim().to_string(),
@@ -137,6 +157,8 @@ fn save_profiles(project_root: &Path, state: &AsrProfilesState) -> Result<()> {
             .iter()
             .map(|profile| {
                 Ok(StoredAsrCloudProfile {
+                    id: profile.id.clone(),
+                    version: profile.version.max(1),
                     name: profile.name.clone(),
                     base_url: profile.base_url.clone(),
                     model: profile.model.clone(),
@@ -149,6 +171,27 @@ fn save_profiles(project_root: &Path, state: &AsrProfilesState) -> Result<()> {
     let content = toml::to_string_pretty(&stored).context("failed to serialize ASR profiles")?;
     std::fs::write(&path, content).with_context(|| format!("failed to write {}", path.display()))?;
     Ok(())
+}
+
+fn default_profile_version() -> u32 {
+    1
+}
+
+fn stable_profile_id(name: &str) -> String {
+    let mut normalized = String::new();
+    for character in name.trim().chars() {
+        if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+            normalized.push(character.to_ascii_lowercase());
+        } else if !normalized.ends_with('-') {
+            normalized.push('-');
+        }
+    }
+    let value = normalized.trim_matches('-');
+    if value.is_empty() {
+        "cloud-asr-profile-legacy".to_string()
+    } else {
+        format!("cloud-asr-profile-{value}")
+    }
 }
 
 #[cfg(windows)]

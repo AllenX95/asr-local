@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://asr-local.invalid/contracts/workflow-v2/summary-draft.schema.json",
+  "title": "SummaryDraft",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile_id", "profile_version", "base_url", "auth_mode", "model", "model_source", "credential_ref", "provider_binding_sha256", "template", "context_strategy", "input_token_budget", "max_output_tokens"],
+  "properties": {
+    "profile_id": { "type": "string", "minLength": 1 },
+    "profile_version": { "type": "integer", "minimum": 1 },
+    "base_url": { "type": "string", "minLength": 1 },
+    "auth_mode": { "enum": ["none", "bearer"] },
+    "model": { "type": "string", "minLength": 1 },
+    "model_source": { "enum": ["profile_default", "recipe_override"] },
+    "credential_ref": { "type": ["string", "null"] },
+    "provider_binding_sha256": { "type": "string", "minLength": 1 },
+    "template": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "name", "prompt_snapshot"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "integer", "minimum": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "prompt_snapshot": { "type": "string", "minLength": 1, "maxLength": 32000 }
+      }
+    },
+    "context_strategy": { "enum": ["auto", "single_pass", "hierarchical"] },
+    "input_token_budget": { "type": "integer", "minimum": 1 },
+    "max_output_tokens": { "type": "integer", "minimum": 1 }
+  }
+}

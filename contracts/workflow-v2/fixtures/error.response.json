@@ -1,0 +1,8 @@
+{
+  "protocol": "asr-local-workflow",
+  "protocol_version": 2,
+  "kind": "response",
+  "request_id": "req_error_001",
+  "ok": false,
+  "error": { "code": "STALE_ATTEMPT", "message": "The workflow attempt is no longer current.", "retryable": false, "field_errors": [], "details": {}, "diagnostic_id": "diag_001" }
+}

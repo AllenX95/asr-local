@@ -130,7 +130,17 @@ class TaskSpec:
     def asr_model_name(self) -> str:
         if self.asr_backend == "cloud" and self.cloud_asr_profile is not None:
             return self.cloud_asr_profile.model or "cloud-asr"
-        return "Qwen/Qwen3-ASR-1.7B"
+        from app.config import DEFAULT_LOCAL_ASR_MODEL, load_models_config
+
+        model_names = {
+            "qwen3_asr_1_7b": "Qwen/Qwen3-ASR-1.7B",
+            "moss_transcribe_diarize": "OpenMOSS-Team/MOSS-Transcribe-Diarize",
+        }
+        try:
+            active_model = load_models_config().active_local_asr_model
+        except Exception:
+            active_model = DEFAULT_LOCAL_ASR_MODEL
+        return model_names.get(active_model, active_model)
 
 
 @dataclass(slots=True)

@@ -4,6 +4,10 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SummaryTemplate {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default = "default_template_version")]
+    pub version: u32,
     pub name: String,
     pub prompt: String,
 }
@@ -25,7 +29,17 @@ pub fn load_templates(project_root: &Path) -> Result<Vec<SummaryTemplate>> {
     let file: SummaryTemplateFile =
         toml::from_str(&content).with_context(|| format!("failed to parse {}", path.display()))?;
 
-    Ok(file.templates)
+    Ok(file
+        .templates
+        .into_iter()
+        .map(|mut template| {
+            if template.id.trim().is_empty() {
+                template.id = stable_template_id(&template.name);
+            }
+            template.version = template.version.max(1);
+            template
+        })
+        .collect())
 }
 
 pub fn upsert_template(
@@ -45,10 +59,13 @@ pub fn upsert_template(
         .iter_mut()
         .find(|template| template.name.eq_ignore_ascii_case(normalized_name))
     {
+        existing.version = existing.version.saturating_add(1);
         existing.name = normalized_name.to_string();
         existing.prompt = normalized_prompt.to_string();
     } else {
         templates.push(SummaryTemplate {
+            id: stable_template_id(normalized_name),
+            version: 1,
             name: normalized_name.to_string(),
             prompt: normalized_prompt.to_string(),
         });
@@ -88,4 +105,25 @@ fn save_templates(project_root: &Path, templates: &[SummaryTemplate]) -> Result<
         .with_context(|| format!("failed to write {}", path.display()))?;
 
     Ok(())
+}
+
+fn default_template_version() -> u32 {
+    1
+}
+
+fn stable_template_id(name: &str) -> String {
+    let mut normalized = String::new();
+    for character in name.trim().chars() {
+        if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+            normalized.push(character.to_ascii_lowercase());
+        } else if !normalized.ends_with('-') {
+            normalized.push('-');
+        }
+    }
+    let value = normalized.trim_matches('-');
+    if value.is_empty() {
+        "summary-template-legacy".to_string()
+    } else {
+        format!("summary-template-{value}")
+    }
 }

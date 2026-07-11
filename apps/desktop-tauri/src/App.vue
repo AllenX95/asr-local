@@ -2,9 +2,14 @@
 import { computed, defineAsyncComponent, onMounted } from 'vue';
 import NavRail from './components/NavRail.vue';
 import { useAppStore } from './stores/appStore';
+import { useWorkflowStore } from './stores/workflowStore';
+import { FakeWorkflowRuntime } from './workflows/adapters/fakeWorkflowRuntime';
+import { TauriWorkflowRuntime } from './workflows/adapters/tauriWorkflowRuntime';
 
 const store = useAppStore();
+const workflowStore = useWorkflowStore();
 const WorkbenchView = defineAsyncComponent(() => import('./features/workbench/WorkbenchView.vue'));
+const WorkflowView = defineAsyncComponent(() => import('./features/workflow/WorkflowView.vue'));
 const MarkdownView = defineAsyncComponent(() => import('./features/markdown/MarkdownView.vue'));
 const SummaryView = defineAsyncComponent(() => import('./features/summary/SummaryView.vue'));
 const HistoryView = defineAsyncComponent(() => import('./features/history/HistoryView.vue'));
@@ -12,6 +17,8 @@ const SettingsView = defineAsyncComponent(() => import('./features/settings/Sett
 
 const currentView = computed(() => {
   switch (store.activeView) {
+    case 'workflow':
+      return WorkflowView;
     case 'markdown':
       return MarkdownView;
     case 'summary':
@@ -26,6 +33,8 @@ const currentView = computed(() => {
 });
 
 onMounted(() => {
+  const isTauri = typeof window !== 'undefined' && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
+  void workflowStore.configure(isTauri ? new TauriWorkflowRuntime() : new FakeWorkflowRuntime());
   void store.initialize();
 });
 </script>

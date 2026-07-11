@@ -2,11 +2,17 @@
 # Put the downloaded model directories under ./models and keep this file updated if you use different names.
 
 model_root = "models"
+active_local_asr_model = "moss_transcribe_diarize"
 
 [qwen3_asr_1_7b]
 path = "models/Qwen/Qwen3-ASR-1.7B"
 required = true
 description = "Manual local path for the downloaded Qwen3-ASR-1.7B model directory."
+
+[moss_transcribe_diarize]
+path = "models/OpenMOSS-Team/MOSS-Transcribe-Diarize"
+required = false
+description = "Manual local path for the downloaded MOSS-Transcribe-Diarize model directory."
 
 [pyannote_speaker_diarization]
 path = "models/pyannote/speaker-diarization-community-1"

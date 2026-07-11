@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://asr-local.invalid/contracts/workflow-v2/workflow-snapshot.schema.json",
+  "title": "WorkflowSnapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["snapshot_version", "workflow_id", "sequence", "spec", "status", "stage", "attempt", "progress", "control", "runtime_plan", "artifacts", "recovery", "last_error", "timestamps"],
+  "properties": {
+    "snapshot_version": { "const": 2 },
+    "workflow_id": { "type": "string", "minLength": 1 },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "spec": { "type": "object" },
+    "status": { "enum": ["queued", "running", "paused", "waiting_for_secret", "completed", "failed", "cancelled", "interrupted"] },
+    "stage": { "type": ["string", "null"] },
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempt_id", "number", "stage_attempts"],
+      "properties": {
+        "attempt_id": { "type": "string", "minLength": 1 },
+        "number": { "type": "integer", "minimum": 1 },
+        "stage_attempts": { "type": "object" }
+      }
+    },
+    "progress": { "type": "object" },
+    "control": { "type": "object" },
+    "runtime_plan": { "type": ["object", "null"] },
+    "artifacts": { "type": "array" },
+    "recovery": { "type": "object" },
+    "last_error": { "type": ["object", "null"] },
+    "timestamps": { "type": "object" }
+  }
+}

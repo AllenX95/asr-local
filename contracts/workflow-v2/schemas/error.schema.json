@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://asr-local.invalid/contracts/workflow-v2/error.schema.json",
+  "title": "ASR Local Workflow v2 Error",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["code", "message", "retryable", "field_errors", "details", "diagnostic_id"],
+  "properties": {
+    "code": { "type": "string", "minLength": 1 },
+    "message": { "type": "string", "minLength": 1 },
+    "retryable": { "type": "boolean" },
+    "field_errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["field", "message"],
+        "properties": {
+          "field": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      }
+    },
+    "details": { "type": "object" },
+    "diagnostic_id": { "type": "string", "minLength": 1 }
+  }
+}

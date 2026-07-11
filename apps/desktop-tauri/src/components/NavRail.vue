@@ -1,11 +1,12 @@
 ﻿<script setup lang="ts">
-import { FileAudio2, FileText, History, Settings, Sparkles } from '@lucide/vue';
+import { FileAudio2, FileText, History, Settings, Sparkles, Zap } from '@lucide/vue';
 import { useAppStore } from '../stores/appStore';
 import type { ViewKey } from '../ipc/workerTypes';
 
 const store = useAppStore();
 
 const items: Array<{ key: ViewKey; label: string; icon: typeof FileAudio2 }> = [
+  { key: 'workflow', label: '一键工作流', icon: Zap },
   { key: 'workbench', label: '工作台', icon: FileAudio2 },
   { key: 'markdown', label: 'Markdown', icon: FileText },
   { key: 'summary', label: '总结', icon: Sparkles },

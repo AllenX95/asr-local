@@ -1,0 +1,11 @@
+{
+  "protocol": "asr-local-workflow",
+  "protocol_version": 2,
+  "kind": "request",
+  "request_id": "req_hello_001",
+  "method": "runtime.hello",
+  "params": {
+    "supported_versions": [2],
+    "client": { "name": "asr-local-tauri", "version": "0.2.0", "installation_id": "install-001" }
+  }
+}

@@ -5,6 +5,7 @@ import type {
   AsrCloudProfile,
   AsrProfilesState,
   HistoryItem,
+  LocalAsrModelKey,
   ModelsConfig,
   RunJobRequest,
   SavedFile,
@@ -13,6 +14,7 @@ import type {
   SummaryProfilesState,
   SummaryRequest,
   SummaryTemplate,
+  WorkflowCatalogs,
   TextFile,
   WorkerUiEvent
 } from './workerTypes';
@@ -58,22 +60,39 @@ export const api = {
       config_path: '',
       raw: {
         model_root: 'models',
+        active_local_asr_model: 'moss_transcribe_diarize',
         qwen3_asr_1_7b: { path: 'models/Qwen/Qwen3-ASR-1.7B', required: true, description: '' },
+        moss_transcribe_diarize: {
+          path: 'models/OpenMOSS-Team/MOSS-Transcribe-Diarize',
+          required: false,
+          description: ''
+        },
         pyannote_speaker_diarization: {
           path: 'models/pyannote/speaker-diarization-community-1',
           required: true,
           description: ''
         }
       },
+      active_local_asr_model: 'moss_transcribe_diarize',
       qwen_path: '',
+      moss_path: '',
       pyannote_path: '',
       qwen_exists: false,
+      moss_exists: false,
       pyannote_exists: false
     })),
-  saveModelPaths: (modelRoot: string, qwenPath: string, pyannotePath: string) =>
+  saveModelPaths: (
+    modelRoot: string,
+    activeLocalAsrModel: LocalAsrModelKey,
+    qwenPath: string,
+    mossPath: string,
+    pyannotePath: string
+  ) =>
     invokeDesktop<ModelsConfig>('save_model_paths', {
       modelRoot,
+      activeLocalAsrModel,
       qwenPath,
+      mossPath,
       pyannotePath
     }),
   loadAsrProfiles: () =>
@@ -100,6 +119,7 @@ export const api = {
   deleteSummaryProfile: (name: string) =>
     invokeDesktop<SummaryProfilesState>('delete_summary_profile', { name }),
   loadSummaryTemplates: () => invokeDesktop<SummaryTemplate[]>('load_summary_templates', undefined, () => []),
+  loadWorkflowCatalogs: () => invokeDesktop<WorkflowCatalogs>('workflow_v2_catalogs', undefined, () => ({ summary_profiles: [], summary_templates: [] })),
   saveSummaryTemplate: (name: string, prompt: string) =>
     invokeDesktop<SummaryTemplate[]>('save_summary_template', { name, prompt }),
   deleteSummaryTemplate: (name: string) =>

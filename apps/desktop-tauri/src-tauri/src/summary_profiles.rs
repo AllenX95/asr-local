@@ -6,6 +6,10 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SummaryProfile {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default = "default_profile_version")]
+    pub version: u32,
     pub name: String,
     pub base_url: String,
     pub model: String,
@@ -21,6 +25,10 @@ pub struct SummaryProfilesState {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct StoredSummaryProfile {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default = "default_profile_version")]
+    pub version: u32,
     pub name: String,
     #[serde(default)]
     pub base_url: String,
@@ -54,6 +62,8 @@ pub fn load_profiles(project_root: &Path) -> Result<SummaryProfilesState> {
         .into_iter()
         .map(|profile| {
             Ok(SummaryProfile {
+                id: if profile.id.trim().is_empty() { stable_profile_id(&profile.name) } else { profile.id },
+                version: profile.version.max(1),
                 name: profile.name,
                 base_url: profile.base_url,
                 model: profile.model,
@@ -78,7 +88,17 @@ pub fn upsert_profile(
         bail!("profile name is empty");
     }
 
+    let existing = state
+        .profiles
+        .iter()
+        .find(|item| item.name.eq_ignore_ascii_case(normalized_name));
     let normalized = SummaryProfile {
+        id: if profile.id.trim().is_empty() {
+            existing.map(|item| item.id.clone()).unwrap_or_else(|| stable_profile_id(normalized_name))
+        } else {
+            profile.id.trim().to_string()
+        },
+        version: existing.map(|item| item.version.saturating_add(1)).unwrap_or_else(|| profile.version.max(1)),
         name: normalized_name.to_string(),
         base_url: profile.base_url.trim().to_string(),
         model: profile.model.trim().to_string(),
@@ -140,6 +160,8 @@ fn save_profiles(project_root: &Path, state: &SummaryProfilesState) -> Result<()
             .iter()
             .map(|profile| {
                 Ok(StoredSummaryProfile {
+                    id: profile.id.clone(),
+                    version: profile.version.max(1),
                     name: profile.name.clone(),
                     base_url: profile.base_url.clone(),
                     model: profile.model.clone(),
@@ -153,6 +175,27 @@ fn save_profiles(project_root: &Path, state: &SummaryProfilesState) -> Result<()
         toml::to_string_pretty(&stored).context("failed to serialize summary profiles")?;
     std::fs::write(&path, content).with_context(|| format!("failed to write {}", path.display()))?;
     Ok(())
+}
+
+fn default_profile_version() -> u32 {
+    1
+}
+
+fn stable_profile_id(name: &str) -> String {
+    let mut normalized = String::new();
+    for character in name.trim().chars() {
+        if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+            normalized.push(character.to_ascii_lowercase());
+        } else if !normalized.ends_with('-') {
+            normalized.push('-');
+        }
+    }
+    let value = normalized.trim_matches('-');
+    if value.is_empty() {
+        "summary-profile-legacy".to_string()
+    } else {
+        format!("summary-profile-{value}")
+    }
 }
 
 #[cfg(windows)]

@@ -21,7 +21,7 @@ Key paths:
 
 Before editing:
 
-- Confirm the working directory is `E:\claude-projects\asr-local`.
+- Confirm the working directory is the current repository root that contains this `AGENTS.md`, and report the actual absolute path when it differs across machines.
 - Check current Git status if available. If Git is unavailable or inconsistent, say so and continue from filesystem evidence.
 - Identify which layer the task touches: Vue UI, Pinia store, Tauri/Rust commands, Python worker, history/logging, build/release, or model/config.
 - Search with `rg`, excluding `outputs`, `models`, `.venv*`, `apps/desktop-tauri/node_modules`, `apps/desktop-tauri/dist`, `apps/desktop-tauri/src-tauri/target`, `tmp`, `rmeta*`, and `__pycache__`.

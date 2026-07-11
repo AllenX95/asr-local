@@ -1,0 +1,8 @@
+{
+  "protocol": "asr-local-workflow",
+  "protocol_version": 2,
+  "kind": "request",
+  "request_id": "req_shutdown_001",
+  "method": "runtime.shutdown",
+  "params": { "mode": "interrupt", "grace_ms": 10000 }
+}

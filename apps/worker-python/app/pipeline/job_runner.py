@@ -35,8 +35,10 @@ class JobTerminated(RuntimeError):
     pass
 
 
-def run_job(payload: dict, emit=None) -> dict:
+def run_job(payload: dict, emit=None, model_manager: ModelManager | None = None) -> dict:
     task = TaskSpec.from_payload(payload)
+    manager = model_manager or _MODEL_MANAGER
+    manager.refresh_config()
     LOGGER.info(
         "job runner started | job_id=%s | source=%s | output_dir=%s | asr_backend=%s | diarization=%s",
         task.job_id,
@@ -62,12 +64,12 @@ def run_job(payload: dict, emit=None) -> dict:
         progress=0.02,
         total_ms=0,
         payload={
-            "runtime": _MODEL_MANAGER.runtime_summary(
+            "runtime": manager.runtime_summary(
                 include_device=task.asr_backend == "local" or task.enable_speaker_diarization
             ),
             "asr_backend": task.asr_backend,
             "asr_profile_name": task.asr_profile_name,
-            "asr_model": task.asr_model_name,
+            "asr_model": resolve_asr_model_name(task, manager),
         },
     )
     check_job_control(task, job_dir, emit=emit, progress=0.02, total_ms=0)
@@ -104,6 +106,7 @@ def run_job(payload: dict, emit=None) -> dict:
         sample_rate=sample_rate,
         normalized_wav_path=normalized_wav_path,
         total_ms=total_ms,
+        model_manager=manager,
     )
     LOGGER.info(
         "speaker diarization finished | job_id=%s | raw_segment_count=%s",
@@ -120,7 +123,15 @@ def run_job(payload: dict, emit=None) -> dict:
     )
     check_job_control(task, job_dir, emit=emit, progress=0.28, total_ms=total_ms)
 
-    normalized_segments = normalize_speaker_segments(speaker_segments, total_ms)
+    integrated_diarization = (
+        task.asr_backend == "local"
+        and manager.local_asr_uses_integrated_diarization()
+    )
+    normalized_segments = normalize_speaker_segments(
+        speaker_segments,
+        total_ms,
+        split_long=not integrated_diarization,
+    )
     LOGGER.info(
         "speaker segments normalized | job_id=%s | normalized_segment_count=%s",
         task.job_id,
@@ -144,6 +155,7 @@ def run_job(payload: dict, emit=None) -> dict:
         total_ms=total_ms,
         job_dir=job_dir,
         emit=emit,
+        model_manager=manager,
     )
 
     _emit(
@@ -215,7 +227,13 @@ def run_job(payload: dict, emit=None) -> dict:
         encoding="utf-8",
     )
 
-    speaker_count = len({segment.speaker for segment in normalized_segments})
+    speaker_count = len(
+        {
+            segment.speaker
+            for segment in transcript_segments
+            if segment.speaker and segment.speaker.strip()
+        }
+    )
 
     _emit(
         emit,
@@ -242,7 +260,7 @@ def run_job(payload: dict, emit=None) -> dict:
         "detected_languages": detected_languages,
         "asr_backend": task.asr_backend,
         "asr_profile_name": task.asr_profile_name,
-        "asr_model": task.asr_model_name,
+        "asr_model": resolve_asr_model_name(task),
     }
 
 
@@ -433,7 +451,9 @@ def build_speaker_segments(
     sample_rate: int,
     normalized_wav_path: Path,
     total_ms: int,
+    model_manager: ModelManager | None = None,
 ) -> list[SpeakerSegment]:
+    manager = model_manager or _MODEL_MANAGER
     if not task.enable_speaker_diarization:
         LOGGER.info("speaker diarization disabled | job_id=%s", task.job_id)
         return [
@@ -446,14 +466,33 @@ def build_speaker_segments(
             )
         ]
 
-    pipeline = _MODEL_MANAGER.get_pyannote_pipeline()
+    if (
+        task.asr_backend == "local"
+        and manager.local_asr_uses_integrated_diarization()
+    ):
+        LOGGER.info(
+            "speaker diarization handled by active local ASR model | job_id=%s | model=%s",
+            task.job_id,
+            manager.local_asr_model_name(),
+        )
+        return [
+            SpeakerSegment(
+                segment_id="segment-0001",
+                speaker="Speaker 1",
+                start_ms=0,
+                end_ms=total_ms,
+                duration_ms=total_ms,
+            )
+        ]
+
+    pipeline = manager.get_pyannote_pipeline()
     LOGGER.info(
         "running pyannote diarization | job_id=%s | sample_rate=%s | wav=%s",
         task.job_id,
         sample_rate,
         normalized_wav_path,
     )
-    waveform = _MODEL_MANAGER.torch.from_numpy(audio).unsqueeze(0)
+    waveform = manager.torch.from_numpy(audio).unsqueeze(0)
     diarization = pipeline(
         {
             "waveform": waveform,
@@ -502,6 +541,8 @@ def build_speaker_segments(
 def normalize_speaker_segments(
     segments: list[SpeakerSegment],
     total_ms: int,
+    *,
+    split_long: bool = True,
 ) -> list[SpeakerSegment]:
     ordered = sorted(segments, key=lambda item: (item.start_ms, item.end_ms))
     merged: list[SpeakerSegment] = []
@@ -543,7 +584,7 @@ def normalize_speaker_segments(
     final_segments: list[SpeakerSegment] = []
     counter = 1
     for segment in merged:
-        if segment.duration_ms <= MAX_SEGMENT_MS:
+        if not split_long or segment.duration_ms <= MAX_SEGMENT_MS:
             segment.segment_id = f"segment-{counter:04d}"
             final_segments.append(segment)
             counter += 1
@@ -575,7 +616,9 @@ def transcribe_segments(
     total_ms: int,
     job_dir: Path,
     emit=None,
+    model_manager: ModelManager | None = None,
 ) -> list[TranscriptSegment]:
+    manager = model_manager or _MODEL_MANAGER
     check_job_control(task, job_dir, emit=emit, progress=0.36, total_ms=total_ms)
     language = resolve_language(task)
     context = build_context(task)
@@ -586,9 +629,9 @@ def transcribe_segments(
         cloud_client = CloudAsrClient(task.cloud_asr_profile)
         batch_size = 1
     else:
-        model = _MODEL_MANAGER.get_qwen_model()
+        model = manager.get_local_asr_model()
         cloud_client = None
-        batch_size = ASR_SEGMENT_BATCH_SIZE
+        batch_size = min(ASR_SEGMENT_BATCH_SIZE, manager.local_asr_batch_size())
     LOGGER.info(
         "starting ASR transcription | job_id=%s | asr_backend=%s | asr_profile=%s | segment_count=%s | batch_size=%s | language=%s | context_chars=%s | terms=%s",
         task.job_id,
@@ -661,29 +704,46 @@ def transcribe_segments(
             transcription = transcriptions.get(segment_index)
             text = (getattr(transcription, "text", "") or "").strip()
             detected_language = getattr(transcription, "language", None)
-
-            normalized_text = normalize_text(text, task.replacements)
-            LOGGER.debug(
-                "segment transcribed | job_id=%s | segment_id=%s | speaker=%s | start_ms=%s | end_ms=%s | text_chars=%s | detected_language=%s",
-                task.job_id,
-                segment.segment_id,
-                canonical_speaker_name(segment.speaker),
-                segment.start_ms,
-                segment.end_ms,
-                len(normalized_text),
-                detected_language,
-            )
-            output.append(
-                TranscriptSegment(
-                    segment_id=segment.segment_id,
-                    speaker=canonical_speaker_name(segment.speaker),
-                    start_ms=segment.start_ms,
-                    end_ms=segment.end_ms,
-                    text=text,
-                    normalized_text=normalized_text,
-                    language=detected_language,
+            expanded_segments = (
+                transcript_segments_from_model_output(
+                    segment,
+                    transcription,
+                    task.replacements,
                 )
+                if task.enable_speaker_diarization
+                else []
             )
+            if expanded_segments:
+                LOGGER.debug(
+                    "segment expanded from model diarization | job_id=%s | segment_id=%s | expanded_count=%s",
+                    task.job_id,
+                    segment.segment_id,
+                    len(expanded_segments),
+                )
+                output.extend(expanded_segments)
+            else:
+                normalized_text = normalize_text(text, task.replacements)
+                LOGGER.debug(
+                    "segment transcribed | job_id=%s | segment_id=%s | speaker=%s | start_ms=%s | end_ms=%s | text_chars=%s | detected_language=%s",
+                    task.job_id,
+                    segment.segment_id,
+                    canonical_speaker_name(segment.speaker),
+                    segment.start_ms,
+                    segment.end_ms,
+                    len(normalized_text),
+                    detected_language,
+                )
+                output.append(
+                    TranscriptSegment(
+                        segment_id=segment.segment_id,
+                        speaker=canonical_speaker_name(segment.speaker),
+                        start_ms=segment.start_ms,
+                        end_ms=segment.end_ms,
+                        text=text,
+                        normalized_text=normalized_text,
+                        language=detected_language,
+                    )
+                )
 
             progress = 0.36 + (0.48 * segment_index / max(len(speaker_segments), 1))
             _emit(
@@ -703,6 +763,39 @@ def transcribe_segments(
                 },
             )
 
+    return output
+
+
+def transcript_segments_from_model_output(
+    source_segment: SpeakerSegment,
+    transcription: object,
+    replacements,
+) -> list[TranscriptSegment]:
+    model_segments = getattr(transcription, "segments", None)
+    if not model_segments:
+        return []
+
+    output: list[TranscriptSegment] = []
+    detected_language = getattr(transcription, "language", None)
+    for index, model_segment in enumerate(model_segments, start=1):
+        text = getattr(model_segment, "text", "") or ""
+        normalized_text = normalize_text(text, replacements)
+        start_ms = source_segment.start_ms + int(getattr(model_segment, "start_ms", 0))
+        end_ms = source_segment.start_ms + int(getattr(model_segment, "end_ms", 0))
+        end_ms = min(max(end_ms, start_ms), source_segment.end_ms)
+        if end_ms <= start_ms or not normalized_text:
+            continue
+        output.append(
+            TranscriptSegment(
+                segment_id=f"{source_segment.segment_id}-{index:03d}",
+                speaker=canonical_speaker_name(getattr(model_segment, "speaker", "")),
+                start_ms=start_ms,
+                end_ms=end_ms,
+                text=text,
+                normalized_text=normalized_text,
+                language=detected_language,
+            )
+        )
     return output
 
 
@@ -811,16 +904,13 @@ def build_context(task: TaskSpec) -> str:
         parts.append(f"Context:\n{task.context_text}")
     if task.terms:
         parts.append("Preferred terms:\n" + "\n".join(f"- {term}" for term in task.terms))
-    if task.replacements:
-        parts.append(
-            "Canonical replacements:\n"
-            + "\n".join(
-                f"- {rule.wrong} => {rule.correct}"
-                for rule in task.replacements
-                if rule.wrong and rule.correct
-            )
-        )
     return "\n\n".join(parts)
+
+
+def resolve_asr_model_name(task: TaskSpec, model_manager: ModelManager | None = None) -> str:
+    if task.asr_backend == "local":
+        return (model_manager or _MODEL_MANAGER).local_asr_model_name()
+    return task.asr_model_name
 
 
 def normalize_text(text: str, replacements) -> str:
