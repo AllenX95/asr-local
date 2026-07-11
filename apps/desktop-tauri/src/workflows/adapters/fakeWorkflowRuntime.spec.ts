@@ -40,4 +40,13 @@ describe('FakeWorkflowRuntime', () => {
     expect(preview.compiled_text).toContain('meeting')
     expect(events).toEqual([`${created.workflow_id}:1`])
   })
+
+  it('clears only terminal workflow records', async () => {
+    const runtime = new FakeWorkflowRuntime()
+    const created = await runtime.submit(draft('clearable'))
+    await expect(runtime.clear(created.workflow_id)).rejects.toThrow('WORKFLOW_NOT_TERMINAL')
+    await runtime.control({ workflow_id: created.workflow_id, expected_attempt_id: created.attempt.attempt_id, action: 'cancel' })
+    await runtime.clear(created.workflow_id)
+    await expect(runtime.get(created.workflow_id)).rejects.toThrow('NOT_FOUND')
+  })
 })

@@ -6,6 +6,7 @@ tmp/
 .env*
 __pycache__/
 *.pyc*
+*.egg-info/
 .venv*/
 apps/desktop-tauri/node_modules/
 apps/desktop-tauri/dist/

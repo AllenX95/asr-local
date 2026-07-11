@@ -13,6 +13,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const runtime = ref<WorkflowRuntime | null>(null)
   const workflowsById = ref<Record<string, WorkflowSnapshot>>({})
   const selectedWorkflowId = ref<string | null>(null)
+  const capabilities = ref<Awaited<ReturnType<WorkflowRuntime['capabilities']>> | null>(null)
   const subscribed = ref(false)
   let unsubscribe: (() => void) | null = null
 
@@ -41,13 +42,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
     runtime.value = nextRuntime
     unsubscribe = nextRuntime.subscribe(reduceEvent)
     subscribed.value = true
-    const snapshots = await nextRuntime.list()
-    for (const snapshot of snapshots) {
-      const current = workflowsById.value[snapshot.workflow_id]
-      if (!current || snapshot.sequence >= current.sequence) {
-        workflowsById.value[snapshot.workflow_id] = snapshot
-      }
-    }
+    const [runtimeCapabilities, snapshots] = await Promise.all([nextRuntime.capabilities(), nextRuntime.list()])
+    capabilities.value = runtimeCapabilities
+    workflowsById.value = Object.fromEntries(snapshots.map((snapshot) => [snapshot.workflow_id, snapshot]))
   }
 
   async function submit(draft: WorkflowDraft): Promise<WorkflowSnapshot> {
@@ -66,9 +63,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
       return
     }
     const snapshots = await runtimeInstance.list()
-    for (const snapshot of snapshots) {
-      const current = workflowsById.value[snapshot.workflow_id]
-      if (!current || snapshot.sequence >= current.sequence) workflowsById.value[snapshot.workflow_id] = snapshot
+    workflowsById.value = Object.fromEntries(snapshots.map((snapshot) => [snapshot.workflow_id, snapshot]))
+    if (selectedWorkflowId.value && !workflowsById.value[selectedWorkflowId.value]) {
+      selectedWorkflowId.value = workflows.value[0]?.workflow_id ?? null
     }
   }
 
@@ -90,6 +87,14 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return snapshot
   }
 
+  async function clear(workflowId: string): Promise<void> {
+    await requireRuntime().clear(workflowId)
+    delete workflowsById.value[workflowId]
+    if (selectedWorkflowId.value === workflowId) {
+      selectedWorkflowId.value = workflows.value[0]?.workflow_id ?? null
+    }
+  }
+
   function select(workflowId: string | null): void {
     selectedWorkflowId.value = workflowId
   }
@@ -99,6 +104,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     workflowsById,
     workflows,
     selectedWorkflowId,
+    capabilities,
     subscribed,
     configure,
     submit,
@@ -106,6 +112,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     control,
     retry,
     registerRevision,
+    clear,
     select,
     reduceEvent,
   }

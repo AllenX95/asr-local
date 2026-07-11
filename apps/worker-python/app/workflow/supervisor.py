@@ -157,6 +157,26 @@ class WorkflowSupervisor:
     async def get(self, workflow_id: str) -> dict[str, Any]:
         return self.registry.get_snapshot(workflow_id)
 
+    async def clear(self, params: dict[str, Any], *, operation_id: str) -> dict[str, Any]:
+        digest = canonical_operation_digest("workflow.clear", params)
+        existing = self.registry.operation_result(operation_id, "workflow.clear", digest)
+        if existing is not None:
+            return {**existing, "deduplicated": True}
+        snapshot = self.registry.get_snapshot(params["workflow_id"])
+        if snapshot["status"] not in {"completed", "failed", "cancelled", "interrupted"}:
+            raise ValueError("WORKFLOW_NOT_TERMINAL")
+        result = {"cleared": True, "workflow_id": params["workflow_id"]}
+        self.registry.save_operation_result(
+            operation_id=operation_id,
+            method="workflow.clear",
+            payload_digest=digest,
+            result=result,
+            now=self.clock(),
+        )
+        self.registry.delete_workflow(params["workflow_id"])
+        self._control_events.pop(params["workflow_id"], None)
+        return result
+
     async def control(self, params: dict[str, Any], *, operation_id: str) -> dict[str, Any]:
         await self.start()
         digest = canonical_operation_digest("workflow.control", params)
@@ -312,6 +332,8 @@ class WorkflowSupervisor:
                 await self._run_workflow(snapshot, retry_stage)
             except asyncio.CancelledError:
                 raise
+            except WorkflowNotFoundError:
+                continue
             except Exception as exc:
                 snapshot = self.registry.get_snapshot(workflow_id)
                 failed = _failed_snapshot(snapshot, exc, self.clock())
@@ -330,6 +352,7 @@ class WorkflowSupervisor:
 
     async def _run_workflow(self, snapshot: dict[str, Any], retry_stage: str | None) -> None:
         running = _transition(snapshot, status="running", stage="preparing", clock=self.clock())
+        running["progress"] = {**running.get("progress", {}), "stage_ratio": 0.15, "overall_ratio": 0.03, "queue_position": None, "detail": "正在校验输入并准备运行环境"}
         event = self._event(running, "attempt_started")
         self.registry.save_snapshot(running, event)
         await self._publish(event)
@@ -360,6 +383,12 @@ class WorkflowSupervisor:
             await self._publish(event)
         else:
             running["attempt"]["stage_attempts"]["transcription"] += 1
+            transcribing = _transition(running, status="running", stage="transcribing", clock=self.clock())
+            transcribing["progress"] = {**transcribing.get("progress", {}), "stage_ratio": 0.05, "overall_ratio": 0.08, "queue_position": None, "detail": "正在加载音频并执行语音识别与说话人分析"}
+            event = self._event(transcribing, "progress")
+            self.registry.save_snapshot(transcribing, event)
+            await self._publish(event)
+            running = transcribing
             transcript_result = await self.transcriber.transcribe(execution_spec, running["attempt"]["attempt_id"])
             # Secret waits and user controls can advance the persisted snapshot
             # while the provider/model call is in flight. Rebase before writing
@@ -367,6 +396,7 @@ class WorkflowSupervisor:
             transcript_base = self.registry.get_snapshot(running["workflow_id"])
             transcript = _add_artifact(transcript_base, transcript_result, kind="transcript_markdown", clock=self.clock())
             transcript["stage"] = "transcript_ready"
+            transcript["progress"] = {**transcript.get("progress", {}), "stage_ratio": 1.0, "overall_ratio": 0.68, "detail": "转录完成，正在准备总结输入"}
             transcript["sequence"] += 1
             transcript["timestamps"]["updated_at"] = self.clock()
             event = self._event(transcript, "artifact_ready")
@@ -390,7 +420,8 @@ class WorkflowSupervisor:
         else:
             summary = _transition(summary_base, status="running", stage="summarizing", clock=self.clock())
             summary["attempt"]["stage_attempts"]["summary"] += 1
-        event = self._event(summary, "state_changed")
+        summary["progress"] = {**summary.get("progress", {}), "stage_ratio": 0.1, "overall_ratio": 0.72 if retry_stage != "writing_final" else 0.93, "detail": "正在调用总结模型" if retry_stage != "writing_final" else "正在写入最终文件"}
+        event = self._event(summary, "progress")
         self.registry.save_snapshot(summary, event)
         await self._publish(event)
         if retry_stage == "writing_final":
@@ -413,6 +444,7 @@ class WorkflowSupervisor:
                 input_artifact_ids=[transcript_artifact["artifact_id"]],
             )
             checkpoint_snapshot["stage"] = "writing_final"
+            checkpoint_snapshot["progress"] = {**checkpoint_snapshot.get("progress", {}), "stage_ratio": 0.4, "overall_ratio": 0.93, "detail": "总结已生成，正在写入最终文件"}
             checkpoint_snapshot["sequence"] += 1
             checkpoint_snapshot["timestamps"]["updated_at"] = self.clock()
             event = self._event(checkpoint_snapshot, "artifact_ready", data={"kind": "summary_checkpoint_json"})
@@ -439,7 +471,7 @@ class WorkflowSupervisor:
         completed["status"] = "completed"
         completed["stage"] = "completed"
         completed["sequence"] += 1
-        completed["progress"] = {"stage_ratio": 1.0, "overall_ratio": 1.0, "queue_position": None}
+        completed["progress"] = {**completed.get("progress", {}), "stage_ratio": 1.0, "overall_ratio": 1.0, "queue_position": None, "detail": "任务已完成，所有产物均已写入"}
         completed["timestamps"]["updated_at"] = self.clock()
         completed["timestamps"]["completed_at"] = completed["timestamps"]["updated_at"]
         event = self._event(completed, "completed")

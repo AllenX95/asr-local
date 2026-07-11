@@ -414,6 +414,35 @@ class SupervisorTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_clear_only_removes_terminal_registry_records_and_keeps_artifacts(self) -> None:
+        async def scenario() -> None:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                source = root / "source.wav"
+                source.write_bytes(b"audio")
+                draft = make_draft(source, "clearable")
+                draft["output"]["directory"] = str(root / "outputs")
+                registry = WorkflowRegistry(root / "registry.sqlite3")
+                supervisor = WorkflowSupervisor(registry, transcriber=FakeTranscriber(), summary_generator=FakeSummaryGenerator())
+                submitted = await supervisor.submit(draft, operation_id="op_submit_clearable")
+                workflow_id = submitted["snapshot"]["workflow_id"]
+                with self.assertRaisesRegex(ValueError, "WORKFLOW_NOT_TERMINAL"):
+                    await supervisor.clear({"workflow_id": workflow_id}, operation_id="op_clear_too_soon")
+                await supervisor._queue.join()
+                completed = await supervisor.get(workflow_id)
+                artifact_paths = [Path(item["path"]) for item in completed["artifacts"]]
+                self.assertTrue(all(path.is_file() for path in artifact_paths))
+                result = await supervisor.clear({"workflow_id": workflow_id}, operation_id="op_clear_done")
+                self.assertTrue(result["cleared"])
+                self.assertEqual(await supervisor.list(), [])
+                with self.assertRaises(KeyError):
+                    await supervisor.get(workflow_id)
+                self.assertTrue(all(path.is_file() for path in artifact_paths))
+                await supervisor.shutdown(interrupt=False)
+                registry.close()
+
+        asyncio.run(scenario())
+
 
 if __name__ == "__main__":
     unittest.main()

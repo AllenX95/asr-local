@@ -14,6 +14,7 @@ PERSISTENT_OPERATION_METHODS = {
     "workflow.submit",
     "workflow.control",
     "workflow.retry",
+    "workflow.clear",
     "artifact.register_revision",
 }
 KNOWN_METHODS = {
@@ -25,6 +26,7 @@ KNOWN_METHODS = {
     "workflow.get",
     "workflow.control",
     "workflow.retry",
+    "workflow.clear",
     "artifact.register_revision",
     "secret.provide",
     "runtime.shutdown",
@@ -266,6 +268,8 @@ def validate_envelope(message: dict[str, Any]) -> dict[str, Any]:
             _validate_control_params(message["params"])
         elif method == "workflow.retry":
             _validate_retry_params(message["params"])
+        elif method == "workflow.clear":
+            _validate_clear_params(message["params"])
         elif method == "artifact.register_revision":
             _validate_revision_params(message["params"])
         elif method == "secret.provide":
@@ -333,6 +337,13 @@ def _validate_retry_params(params: dict[str, Any]) -> None:
         raise _error("expected_sequence must be positive.", "workflow.retry.params.expected_sequence")
     if params["from_stage"] not in {"auto", "transcribing", "summarizing", "writing_final"}:
         raise _error("Unsupported retry stage.", "workflow.retry.params.from_stage")
+
+
+def _validate_clear_params(params: dict[str, Any]) -> None:
+    allowed = {"workflow_id"}
+    _reject_unknown(params, allowed, "workflow.clear.params")
+    _require_keys(params, allowed, "workflow.clear.params")
+    _string(params["workflow_id"], "workflow.clear.params.workflow_id")
 
 
 def _validate_revision_params(params: dict[str, Any]) -> None:

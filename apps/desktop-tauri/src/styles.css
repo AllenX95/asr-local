@@ -356,6 +356,207 @@ h2 {
   gap: 12px;
 }
 
+.task-center {
+  gap: 12px;
+  max-height: calc(100vh - 110px);
+  overflow: hidden;
+}
+
+.task-center-header,
+.task-row,
+.section-toggle,
+.diagnostics-toggle,
+.terminal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.task-center-header small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.task-summary {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.task-summary > span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 9px 10px;
+  font-size: 13px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--teal);
+}
+
+.status-dot.queued { background: #d98b19; }
+
+.task-list {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+  max-height: min(48vh, 520px);
+  overflow: auto;
+  margin: 0;
+  padding: 1px;
+  list-style: none;
+}
+
+.task-item {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+}
+
+.task-item.selected {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 2px rgba(20, 117, 111, 0.09);
+}
+
+.task-row {
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 11px 12px;
+  color: inherit;
+  text-align: left;
+}
+
+.task-identity {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.task-identity strong,
+.task-identity small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-identity small,
+.task-row-progress span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.task-row-progress {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 5px;
+}
+
+.progress-track.compact {
+  height: 3px;
+  border-radius: 0;
+}
+
+.task-expanded {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  background: rgba(20, 117, 111, 0.025);
+  padding: 13px;
+}
+
+.progress-hero {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  align-items: center;
+  gap: 10px;
+}
+
+.progress-hero > strong {
+  color: var(--teal);
+  font-size: 20px;
+}
+
+.progress-details {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.progress-details > div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 9px;
+  font-size: 12px;
+}
+
+.progress-details dt { color: var(--text-muted); }
+.progress-details dd {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.recent-task-section {
+  display: grid;
+  min-height: 0;
+  border-top: 1px solid var(--line);
+  padding-top: 4px;
+}
+
+.section-toggle,
+.diagnostics-toggle {
+  width: 100%;
+  min-height: 36px;
+  border: 0;
+  background: transparent;
+  padding: 7px 2px;
+  color: inherit;
+}
+
+.task-list.recent {
+  max-height: min(30vh, 320px);
+}
+
+.status-badge {
+  border-radius: 999px;
+  background: #edf0ec;
+  padding: 4px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.status-badge[data-status="completed"] { background: #e8f4ec; color: #277044; }
+.status-badge[data-status="failed"] { background: #faeaea; color: var(--danger); }
+
+.terminal-actions { justify-content: flex-end; }
+.clear-task { color: var(--danger); }
+.diagnostics-toggle {
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.diagnostics-content { display: grid; gap: 10px; }
+.spinning { animation: task-spin 0.8s linear infinite; }
+@keyframes task-spin { to { transform: rotate(360deg); } }
+
 .workflow-actions {
   display: flex;
   flex-wrap: wrap;
@@ -870,9 +1071,13 @@ td small {
 
 @media (max-width: 1180px) {
   .workbench-grid,
-  .settings-grid {
+  .settings-grid,
+  .workflow-grid {
     grid-template-columns: 1fr;
   }
+
+  .task-center { max-height: none; }
+  .task-list { max-height: 520px; }
 
   .markdown-split {
     grid-template-columns: 1fr;

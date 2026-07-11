@@ -164,9 +164,6 @@ fn python_candidate(project_root: &Path) -> Result<(PathBuf, Vec<String>)> {
     }
     let candidates = [
         (project_root.join("apps/worker-python/.venv/Scripts/python.exe"), Vec::new()),
-        (project_root.join("apps/worker-python/.venv-phase0/Scripts/python.exe"), Vec::new()),
-        (project_root.join(".venv-moss313/Scripts/python.exe"), Vec::new()),
-        (project_root.join(".venv-moss313/bin/python"), Vec::new()),
         (PathBuf::from("python"), Vec::new()),
         (PathBuf::from("py"), vec!["-3".to_string()]),
     ];

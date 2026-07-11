@@ -20,6 +20,7 @@ export interface WorkflowRuntime {
   submit(draft: WorkflowDraft): Promise<WorkflowSnapshot>
   list(): Promise<WorkflowSnapshot[]>
   get(workflowId: string): Promise<WorkflowSnapshot>
+  clear(workflowId: string): Promise<void>
   control(command: WorkflowControlCommand): Promise<WorkflowSnapshot>
   retry(command: WorkflowRetryCommand): Promise<WorkflowSnapshot>
   registerRevision(command: ArtifactRevisionCommand): Promise<WorkflowSnapshot>

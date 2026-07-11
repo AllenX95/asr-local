@@ -237,6 +237,22 @@ class WorkflowRegistry:
         ).fetchall()
         return [json.loads(row["event_json"]) for row in reversed(rows)]
 
+    def delete_workflow(self, workflow_id: str) -> None:
+        """Delete registry metadata while deliberately leaving artifact files untouched."""
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT status FROM workflows WHERE workflow_id = ?",
+                (workflow_id,),
+            ).fetchone()
+            if row is None:
+                raise WorkflowNotFoundError(workflow_id)
+            if row["status"] not in {"completed", "failed", "cancelled", "interrupted"}:
+                raise ValueError("WORKFLOW_NOT_TERMINAL")
+            connection.execute("DELETE FROM artifacts WHERE workflow_id = ?", (workflow_id,))
+            connection.execute("DELETE FROM workflow_events WHERE workflow_id = ?", (workflow_id,))
+            connection.execute("DELETE FROM attempts WHERE workflow_id = ?", (workflow_id,))
+            connection.execute("DELETE FROM workflows WHERE workflow_id = ?", (workflow_id,))
+
     def _sync_artifacts(self, connection: sqlite3.Connection, snapshot: dict[str, Any]) -> None:
         for artifact in snapshot.get("artifacts", []):
             connection.execute(

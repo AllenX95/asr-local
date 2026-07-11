@@ -40,6 +40,10 @@ export class TauriWorkflowRuntime implements WorkflowRuntime {
     return { ...result.snapshot, timeline: result.timeline ?? [] }
   }
 
+  async clear(workflowId: string): Promise<void> {
+    await invoke('workflow_v2_clear', { operationId: operationId('op_clear'), workflowId })
+  }
+
   async control(command: WorkflowControlCommand): Promise<WorkflowSnapshot> {
     const result = await invoke<{ snapshot: WorkflowSnapshot }>('workflow_v2_control', {
       operationId: operationId('op_control'),

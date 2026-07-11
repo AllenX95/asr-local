@@ -52,8 +52,10 @@ python -m app.main --contract v2 --pipeline-mode production
 
 The production mode requires the MOSS inference dependencies. Summary and Cloud
 ASR bearer credentials use the ephemeral secret broker and trusted desktop
-bridge. The legacy Qwen+pyannote path is available as an explicit v2 pipeline
-for compatibility, while the desktop default remains MOSS.
+bridge. The legacy Qwen+pyannote path remains available in code as an explicit
+v2 pipeline, but the canonical project `.venv` is MOSS-first because the Qwen
+package pins an older Transformers release. Keep a separate legacy runtime
+and pass it through `ASR_LOCAL_PYTHON` if that compatibility path is needed.
 
 The Tauri v2 client accepts `ASR_LOCAL_V2_PIPELINE_MODE=auto|production|fake`.
 The default is `auto`: it resolves to production when the MOSS model plus
@@ -63,5 +65,5 @@ explicitly during a release gate.
 
 For a source checkout with a separate inference environment, set
 `ASR_LOCAL_PYTHON` to that environment's Python executable. The Tauri client
-also recognizes the repository-local `.venv-moss313` smoke environment before
-falling back to the system Python.
+uses the canonical `apps/worker-python/.venv` runtime before falling back to
+the system Python.

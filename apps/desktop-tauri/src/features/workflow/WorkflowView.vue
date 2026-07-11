@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { FolderOpen, Pause, Play, RefreshCw, RotateCcw, Square } from '@lucide/vue';
+import { ChevronDown, ChevronRight, Clock3, FolderOpen, Pause, Play, RefreshCw, RotateCcw, Square, Trash2 } from '@lucide/vue';
 import { api } from '../../ipc/tauriClient';
 import type { WorkflowCatalogs, WorkflowSummaryProfile, WorkflowSummaryTemplate } from '../../ipc/workerTypes';
 import { useAppStore } from '../../stores/appStore';
@@ -29,6 +29,10 @@ const editingArtifactId = ref<string | null>(null);
 const artifactText = ref('');
 const artifactError = ref('');
 const artifactSaving = ref(false);
+const refreshing = ref(false);
+const clearingWorkflowId = ref<string | null>(null);
+const recentExpanded = ref(true);
+const diagnosticsExpanded = ref(false);
 
 const availableProfiles = computed<WorkflowSummaryProfile[]>(() => {
   if (catalogs.value.summary_profiles.length) return catalogs.value.summary_profiles;
@@ -71,6 +75,11 @@ const selectedWorkflow = computed<WorkflowSnapshot | null>(() => {
   const id = workflowStore.selectedWorkflowId;
   return id ? workflowStore.workflowsById[id] ?? null : workflowStore.workflows[0] ?? null;
 });
+const activeStatuses = new Set(['queued', 'running', 'paused', 'waiting_for_secret']);
+const activeWorkflows = computed(() => workflowStore.workflows.filter((item) => activeStatuses.has(item.status)));
+const recentWorkflows = computed(() => workflowStore.workflows.filter((item) => !activeStatuses.has(item.status)));
+const runningCount = computed(() => activeWorkflows.value.filter((item) => ['running', 'paused', 'waiting_for_secret'].includes(item.status)).length);
+const queuedCount = computed(() => activeWorkflows.value.filter((item) => item.status === 'queued').length);
 
 watch(
   () => appStore.initialized,
@@ -228,10 +237,27 @@ async function retry(): Promise<void> {
 }
 
 async function refresh(): Promise<void> {
+  if (refreshing.value) return;
+  refreshing.value = true;
   try {
     await workflowStore.refresh();
   } catch (reason) {
     error.value = String(reason);
+  } finally {
+    refreshing.value = false;
+  }
+}
+
+async function clearWorkflow(snapshot: WorkflowSnapshot): Promise<void> {
+  if (!['completed', 'failed', 'cancelled', 'interrupted'].includes(snapshot.status)) return;
+  if (!window.confirm(`清除“${snapshot.spec.display_name}”的任务记录？\n\n已生成的转录、总结和其他输出文件会保留。`)) return;
+  clearingWorkflowId.value = snapshot.workflow_id;
+  try {
+    await workflowStore.clear(snapshot.workflow_id);
+  } catch (reason) {
+    error.value = String(reason);
+  } finally {
+    clearingWorkflowId.value = null;
   }
 }
 
@@ -294,6 +320,39 @@ function statusLabel(snapshot: WorkflowSnapshot): string {
   if (snapshot.stage === 'summarizing') return '总结中';
   if (snapshot.stage === 'writing_final') return '写入文件';
   return snapshot.status === 'queued' ? '排队中' : '准备中';
+}
+
+function ratio(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : null;
+}
+
+function percent(value: number | null | undefined): string {
+  const normalized = ratio(value);
+  return normalized === null ? '等待进度数据' : `${Math.round(normalized * 100)}%`;
+}
+
+function formatDuration(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return '—';
+  const totalSeconds = Math.floor(value / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return hours > 0
+    ? `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+    : `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function progressSummary(snapshot: WorkflowSnapshot): string {
+  if (snapshot.status === 'queued') {
+    const position = snapshot.progress.queue_position;
+    return typeof position === 'number' ? `排队第 ${position + 1} 位` : '等待调度';
+  }
+  return statusLabel(snapshot);
+}
+
+function updatedAt(snapshot: WorkflowSnapshot): string {
+  const date = new Date(snapshot.timestamps.updated_at);
+  return Number.isNaN(date.getTime()) ? snapshot.timestamps.updated_at : date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
 </script>
 
@@ -409,68 +468,104 @@ function statusLabel(snapshot: WorkflowSnapshot): string {
     </div>
 
     <aside class="side-stack">
-      <div class="panel">
-        <header class="panel-header compact">
+      <div class="panel task-center">
+        <header class="task-center-header">
           <div>
-            <h2>任务队列</h2>
-            <small>最多同时运行 {{ 3 }} 个工作流，超出任务自动排队。</small>
+            <h2>任务中心</h2>
+            <small>最多并行 {{ workflowStore.capabilities?.max_inflight_workflows ?? '—' }} 个任务</small>
           </div>
-          <button class="ghost" type="button" title="刷新" @click="refresh"><RefreshCw :size="16" /></button>
+          <button class="ghost icon-button" type="button" title="刷新任务" :disabled="refreshing" @click="refresh">
+            <RefreshCw :size="16" :class="{ spinning: refreshing }" />
+          </button>
         </header>
-        <ol class="workflow-list">
-          <li
-            v-for="snapshot in workflowStore.workflows"
-            :key="snapshot.workflow_id"
-            :class="{ selected: selectedWorkflow?.workflow_id === snapshot.workflow_id }"
-            @click="workflowStore.select(snapshot.workflow_id)"
-          >
-            <div>
-              <strong>{{ snapshot.spec.display_name }}</strong>
-              <span>{{ statusLabel(snapshot) }}</span>
-            </div>
-            <small>#{{ snapshot.attempt.number }} · seq {{ snapshot.sequence }}</small>
-          </li>
-          <li v-if="workflowStore.workflows.length === 0" class="empty-state">还没有提交任务。</li>
-        </ol>
-      </div>
 
-      <div v-if="selectedWorkflow" class="panel workflow-detail">
-        <header class="panel-header compact">
-          <div>
-            <h2>{{ selectedWorkflow.spec.display_name }}</h2>
-            <small>{{ statusLabel(selectedWorkflow) }} · {{ selectedWorkflow.stage || '等待' }}</small>
-          </div>
-          <button class="ghost" type="button" title="刷新任务" @click="refresh"><RotateCcw :size="16" /></button>
-        </header>
-        <div class="progress-track"><span :style="{ width: `${Math.round(Number(selectedWorkflow.progress.overall_ratio || 0) * 100)}%` }" /></div>
-        <p v-if="selectedWorkflow.last_error" class="workflow-error">{{ selectedWorkflow.last_error.message }}</p>
-        <div class="workflow-actions">
-          <button v-if="canPause(selectedWorkflow)" type="button" @click="control('pause')"><Pause :size="15" />暂停</button>
-          <button v-if="canResume(selectedWorkflow)" type="button" @click="control('resume')"><Play :size="15" />继续</button>
-          <button v-if="canCancel(selectedWorkflow)" class="danger" type="button" @click="control('cancel')"><Square :size="15" />取消</button>
-          <button v-if="['failed', 'completed', 'interrupted'].includes(selectedWorkflow.status)" type="button" @click="retry"><RotateCcw :size="15" />重试</button>
+        <div class="task-summary">
+          <span><i class="status-dot running" />运行中 <strong>{{ runningCount }}</strong></span>
+          <span><i class="status-dot queued" />排队中 <strong>{{ queuedCount }}</strong></span>
         </div>
-        <div v-if="selectedWorkflow.artifacts.length" class="artifact-list">
-          <div v-for="artifact in selectedWorkflow.artifacts" :key="artifact.artifact_id">
-            <strong>{{ artifact.kind }}</strong>
-            <span>{{ artifact.path }}{{ artifact.stale ? ' · 已过期' : '' }}</span>
-            <button type="button" @click="editArtifact(artifact.artifact_id)">编辑</button>
-          </div>
-        </div>
-        <ol v-if="selectedWorkflow.timeline?.length" class="workflow-timeline">
-          <li v-for="entry in selectedWorkflow.timeline.slice(-8).reverse()" :key="`${entry.sequence}-${entry.type}`">
-            <strong>#{{ entry.sequence }} · {{ entry.type }}</strong>
-            <span>{{ entry.stage || '—' }} · {{ entry.occurred_at }}</span>
+
+        <ol class="task-list">
+          <li
+            v-for="snapshot in activeWorkflows"
+            :key="snapshot.workflow_id"
+            class="task-item"
+            :class="{ selected: selectedWorkflow?.workflow_id === snapshot.workflow_id }"
+          >
+            <button class="task-row" type="button" @click="workflowStore.select(snapshot.workflow_id)">
+              <span class="task-identity">
+                <strong>{{ snapshot.spec.display_name }}</strong>
+                <small>{{ progressSummary(snapshot) }} · {{ updatedAt(snapshot) }}</small>
+              </span>
+              <span class="task-row-progress">
+                <span>{{ percent(snapshot.progress.overall_ratio) }}</span>
+                <ChevronDown v-if="selectedWorkflow?.workflow_id === snapshot.workflow_id" :size="16" />
+                <ChevronRight v-else :size="16" />
+              </span>
+            </button>
+            <div class="progress-track compact"><span :style="{ width: `${(ratio(snapshot.progress.overall_ratio) ?? 0) * 100}%` }" /></div>
+
+            <div v-if="selectedWorkflow?.workflow_id === snapshot.workflow_id" class="task-expanded">
+              <div class="progress-hero">
+                <strong>{{ percent(snapshot.progress.overall_ratio) }}</strong>
+                <div class="progress-track"><span :style="{ width: `${(ratio(snapshot.progress.overall_ratio) ?? 0) * 100}%` }" /></div>
+              </div>
+              <dl class="progress-details">
+                <div><dt>当前阶段</dt><dd>{{ statusLabel(snapshot) }} · {{ percent(snapshot.progress.stage_ratio) }}</dd></div>
+                <div v-if="snapshot.status === 'queued'"><dt>队列位置</dt><dd>{{ progressSummary(snapshot) }}</dd></div>
+                <div><dt>音频进度</dt><dd>{{ formatDuration(snapshot.progress.processed_ms) }} / {{ formatDuration(snapshot.progress.total_ms) }}</dd></div>
+                <div><dt>当前步骤</dt><dd>{{ snapshot.progress.detail || '等待工作进程上报详细信息' }}</dd></div>
+                <div><dt>更新时间</dt><dd><Clock3 :size="14" />{{ updatedAt(snapshot) }}</dd></div>
+              </dl>
+              <p v-if="snapshot.last_error" class="workflow-error">{{ snapshot.last_error.message }}</p>
+              <div class="workflow-actions">
+                <button v-if="canPause(snapshot)" type="button" :disabled="Boolean(snapshot.control.pending_action)" @click="control('pause')"><Pause :size="15" />{{ snapshot.control.pending_action === 'pause' ? '暂停中' : '暂停' }}</button>
+                <button v-if="canResume(snapshot)" type="button" :disabled="Boolean(snapshot.control.pending_action)" @click="control('resume')"><Play :size="15" />继续</button>
+                <button v-if="canCancel(snapshot)" class="danger" type="button" :disabled="Boolean(snapshot.control.pending_action)" @click="control('cancel')"><Square :size="15" />{{ snapshot.control.pending_action === 'cancel' ? '取消中' : '取消' }}</button>
+              </div>
+            </div>
           </li>
+          <li v-if="activeWorkflows.length === 0" class="empty-state">当前没有运行或排队任务。</li>
         </ol>
-        <div v-if="editingArtifactId" class="artifact-editor">
-          <textarea v-model="artifactText" rows="10" />
-          <p v-if="artifactError" class="workflow-error">{{ artifactError }}</p>
-          <div class="workflow-actions">
-            <button type="button" :disabled="artifactSaving" @click="saveArtifactRevision">{{ artifactSaving ? '保存中' : '保存为新版本' }}</button>
-            <button class="ghost" type="button" @click="editingArtifactId = null">取消</button>
-          </div>
-        </div>
+
+        <section v-if="recentWorkflows.length" class="recent-task-section">
+          <button class="section-toggle" type="button" @click="recentExpanded = !recentExpanded">
+            <span>最近任务 <strong>{{ recentWorkflows.length }}</strong></span>
+            <ChevronDown v-if="recentExpanded" :size="16" />
+            <ChevronRight v-else :size="16" />
+          </button>
+          <ol v-if="recentExpanded" class="task-list recent">
+            <li v-for="snapshot in recentWorkflows.slice(0, 6)" :key="snapshot.workflow_id" class="task-item terminal" :class="{ selected: selectedWorkflow?.workflow_id === snapshot.workflow_id }">
+              <button class="task-row" type="button" @click="workflowStore.select(snapshot.workflow_id)">
+                <span class="task-identity"><strong>{{ snapshot.spec.display_name }}</strong><small>{{ updatedAt(snapshot) }}</small></span>
+                <span class="status-badge" :data-status="snapshot.status">{{ statusLabel(snapshot) }}</span>
+              </button>
+              <div v-if="selectedWorkflow?.workflow_id === snapshot.workflow_id" class="task-expanded terminal-detail">
+                <div class="terminal-actions">
+                  <button v-if="['failed', 'completed', 'interrupted'].includes(snapshot.status)" type="button" @click="retry"><RotateCcw :size="15" />重试</button>
+                  <button class="clear-task" type="button" :disabled="clearingWorkflowId === snapshot.workflow_id" @click="clearWorkflow(snapshot)"><Trash2 :size="15" />{{ clearingWorkflowId === snapshot.workflow_id ? '清除中' : '清除记录' }}</button>
+                </div>
+                <button class="diagnostics-toggle" type="button" @click="diagnosticsExpanded = !diagnosticsExpanded">
+                  <span>产物与诊断信息</span><ChevronDown v-if="diagnosticsExpanded" :size="15" /><ChevronRight v-else :size="15" />
+                </button>
+                <div v-if="diagnosticsExpanded" class="diagnostics-content">
+                  <div v-if="snapshot.artifacts.length" class="artifact-list">
+                    <div v-for="artifact in snapshot.artifacts" :key="artifact.artifact_id">
+                      <strong>{{ artifact.kind }}</strong><span>{{ artifact.path }}{{ artifact.stale ? ' · 已过期' : '' }}</span><button type="button" @click="editArtifact(artifact.artifact_id)">编辑</button>
+                    </div>
+                  </div>
+                  <ol v-if="snapshot.timeline?.length" class="workflow-timeline">
+                    <li v-for="entry in snapshot.timeline.slice(-8).reverse()" :key="`${entry.sequence}-${entry.type}`"><strong>#{{ entry.sequence }} · {{ entry.type }}</strong><span>{{ entry.stage || '—' }} · {{ entry.occurred_at }}</span></li>
+                  </ol>
+                </div>
+                <div v-if="editingArtifactId" class="artifact-editor">
+                  <textarea v-model="artifactText" rows="10" />
+                  <p v-if="artifactError" class="workflow-error">{{ artifactError }}</p>
+                  <div class="workflow-actions"><button type="button" :disabled="artifactSaving" @click="saveArtifactRevision">{{ artifactSaving ? '保存中' : '保存为新版本' }}</button><button class="ghost" type="button" @click="editingArtifactId = null">取消</button></div>
+                </div>
+              </div>
+            </li>
+          </ol>
+        </section>
       </div>
     </aside>
   </section>

@@ -68,6 +68,18 @@ pub fn workflow_v2_get(app: AppHandle, workflow_id: String, timeline_limit: Opti
 }
 
 #[tauri::command]
+pub fn workflow_v2_clear(app: AppHandle, operation_id: String, workflow_id: String) -> CommandResult<Value> {
+    workflow_v2_client::request(
+        app,
+        &config::project_root(),
+        "workflow.clear",
+        Some(&operation_id),
+        json!({"workflow_id": workflow_id}),
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn workflow_v2_control(app: AppHandle, operation_id: String, workflow_id: String, expected_attempt_id: String, action: String) -> CommandResult<Value> {
     workflow_v2_client::request(app, &config::project_root(), "workflow.control", Some(&operation_id), json!({"workflow_id": workflow_id, "expected_attempt_id": expected_attempt_id, "action": action})).map_err(|e| e.to_string())
 }

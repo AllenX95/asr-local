@@ -10,11 +10,6 @@ from app.ipc.v2 import ProtocolError, decode_request, encode_event, encode_respo
 from app.config import project_root
 from app.workflow.registry import WorkflowRegistry
 from app.workflow.supervisor import WorkflowSupervisor
-from app.pipeline.moss_v2 import MossTranscriber
-from app.pipeline.cloud_asr import CloudAsrTranscriber
-from app.pipeline.router import ProfileRoutingTranscriber
-from app.pipeline.legacy_v2 import LegacyQwenPyannoteTranscriber
-from app.summary.openai_compatible import OpenAICompatibleSummaryGenerator
 from app.workflow.secrets import EphemeralSecretBroker, SecretRequest
 
 
@@ -69,18 +64,13 @@ class V2StdioServer:
         self.secret_provider = BrokerSecretProvider()
         self.requested_pipeline_mode = pipeline_mode
         self.pipeline_mode = resolve_pipeline_mode(pipeline_mode)
+        self.startup_error: dict[str, Any] | None = None
         if self.pipeline_mode == "production":
-            moss = MossTranscriber()
-            self.supervisor = WorkflowSupervisor(
-                self.registry,
-                transcriber=ProfileRoutingTranscriber(
-                    moss=moss,
-                    cloud=CloudAsrTranscriber(secret_provider=self.secret_provider),
-                    legacy=LegacyQwenPyannoteTranscriber(),
-                ),
-                summary_generator=OpenAICompatibleSummaryGenerator(secret_provider=self.secret_provider),
-                event_sink=self._emit_event,
-            )
+            try:
+                self.supervisor = self._production_supervisor()
+            except (ImportError, OSError) as exc:
+                self.startup_error = _production_startup_error(exc)
+                self.supervisor = WorkflowSupervisor(self.registry, event_sink=self._emit_event)
         else:
             self.supervisor = WorkflowSupervisor(self.registry, event_sink=self._emit_event)
         self.secret_provider.on_request = self.supervisor.mark_waiting_for_secret
@@ -90,6 +80,32 @@ class V2StdioServer:
         self._stdout_lock = asyncio.Lock()
         self._defer_events = False
         self._deferred_events: list[dict[str, Any]] = []
+
+    def _production_supervisor(self) -> WorkflowSupervisor:
+        """Load native adapters only after production mode is selected.
+
+        The v2 protocol must remain available in auto/fake mode on machines
+        that do not have the optional inference stack installed. Keeping these
+        imports behind the mode boundary also lets explicit production errors
+        be returned as protocol responses instead of killing stdout at import
+        time.
+        """
+        from app.pipeline.cloud_asr import CloudAsrTranscriber
+        from app.pipeline.legacy_v2 import LegacyQwenPyannoteTranscriber
+        from app.pipeline.moss_v2 import MossTranscriber
+        from app.pipeline.router import ProfileRoutingTranscriber
+        from app.summary.openai_compatible import OpenAICompatibleSummaryGenerator
+
+        return WorkflowSupervisor(
+            self.registry,
+            transcriber=ProfileRoutingTranscriber(
+                moss=MossTranscriber(),
+                cloud=CloudAsrTranscriber(secret_provider=self.secret_provider),
+                legacy=LegacyQwenPyannoteTranscriber(),
+            ),
+            summary_generator=OpenAICompatibleSummaryGenerator(secret_provider=self.secret_provider),
+            event_sink=self._emit_event,
+        )
 
     async def run(self) -> int:
         while not self.stopping:
@@ -111,6 +127,9 @@ class V2StdioServer:
             message = decode_request(raw_line)
             request_id = message.get("request_id", request_id)
             operation_id = message.get("operation_id")
+            if self.startup_error is not None:
+                await self._respond(request_id, ok=False, error=self.startup_error, operation_id=operation_id)
+                return
             if not self.handshaken:
                 if message["method"] != "runtime.hello":
                     raise ProtocolError("HANDSHAKE_REQUIRED", "runtime.hello must be the first request.", [], {})
@@ -170,6 +189,8 @@ class V2StdioServer:
         if method == "workflow.get":
             snapshot = await self.supervisor.get(params["workflow_id"])
             return {"snapshot": snapshot, "timeline": self.supervisor.registry.timeline(params["workflow_id"], params.get("timeline_limit", 200)), "attempt_history": []}
+        if method == "workflow.clear":
+            return await self.supervisor.clear(params, operation_id=message["operation_id"])
         if method == "workflow.control":
             return await self.supervisor.control(params, operation_id=message["operation_id"])
         if method == "workflow.retry":
@@ -216,6 +237,7 @@ def capabilities(*, requested_pipeline_mode: str = "auto", resolved_pipeline_mod
             "workflow.submit",
             "workflow.list",
             "workflow.get",
+            "workflow.clear",
             "workflow.control",
             "workflow.retry",
             "artifact.register_revision",
@@ -252,9 +274,15 @@ def resolve_pipeline_mode(requested: str) -> str:
         snapshot = environment_snapshot()
         moss = snapshot["models"]["moss_transcribe_diarize"]
         optional = snapshot["optional_modules"]
+        torch_runtime = snapshot.get("torch_runtime")
+        torch_ready = (
+            bool(torch_runtime.get("available"))
+            if isinstance(torch_runtime, dict)
+            else bool(optional.get("torch"))
+        )
         native_ready = (
             bool(moss.get("exists"))
-            and bool(optional.get("torch"))
+            and torch_ready
             and bool(optional.get("transformers"))
             and importlib.util.find_spec("soundfile") is not None
         )
@@ -290,10 +318,25 @@ def _prompt_preview(params: dict[str, Any]) -> dict[str, Any]:
 
 def _error_code(error: Exception) -> str:
     message = str(error)
-    for code in ("STALE_ATTEMPT", "SEQUENCE_CONFLICT", "INVALID_TRANSITION", "CONTROL_NOT_SUPPORTED", "NOT_FOUND", "CREDENTIAL_REJECTED", "CREDENTIAL_REQUIRED", "SOURCE_NOT_FOUND", "SOURCE_UNREADABLE", "SOURCE_CHANGED", "OUTPUT_CONFLICT", "SUMMARY_INPUT_TOO_LARGE", "SUMMARY_RESULT_UNKNOWN", "MODEL_SNAPSHOT_MISMATCH", "LEGACY_ADAPTER_UNAVAILABLE", "CLOUD_PROFILE_REQUIRED", "UNSUPPORTED_PIPELINE_PROFILE"):
+    for code in ("STALE_ATTEMPT", "SEQUENCE_CONFLICT", "INVALID_TRANSITION", "CONTROL_NOT_SUPPORTED", "WORKFLOW_NOT_TERMINAL", "NOT_FOUND", "CREDENTIAL_REJECTED", "CREDENTIAL_REQUIRED", "SOURCE_NOT_FOUND", "SOURCE_UNREADABLE", "SOURCE_CHANGED", "OUTPUT_CONFLICT", "SUMMARY_INPUT_TOO_LARGE", "SUMMARY_RESULT_UNKNOWN", "MODEL_SNAPSHOT_MISMATCH", "LEGACY_ADAPTER_UNAVAILABLE", "CLOUD_PROFILE_REQUIRED", "UNSUPPORTED_PIPELINE_PROFILE"):
         if code in message:
             return code
     return "INTERNAL"
+
+
+def _production_startup_error(error: Exception) -> dict[str, Any]:
+    dependency = getattr(error, "name", None) or "the native inference runtime"
+    return {
+        "code": "DEPENDENCY_MISSING" if isinstance(error, ImportError) else "RUNTIME_INIT_FAILED",
+        "message": f"MOSS production runtime cannot start: {dependency}",
+        "retryable": False,
+        "field_errors": [],
+        "details": {
+            "dependency": dependency,
+            "hint": "Install the worker's moss-native dependencies in apps/worker-python/.venv and restart the desktop app.",
+        },
+        "diagnostic_id": "diag-v2-missing-dependency",
+    }
 
 
 def run_v2_stdio(*, pipeline_mode: str = "auto") -> int:

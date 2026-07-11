@@ -56,7 +56,7 @@ export interface WorkflowSnapshot {
   status: WorkflowStatus
   stage: WorkflowStage
   attempt: WorkflowAttempt
-  progress: Record<string, unknown>
+  progress: WorkflowProgress
   control: { pending_action: 'pause' | 'cancel' | null }
   runtime_plan: Record<string, unknown> | null
   artifacts: WorkflowArtifact[]
@@ -73,6 +73,15 @@ export interface WorkflowSnapshot {
     completed_at: string | null
   }
   timeline?: WorkflowTimelineEntry[]
+}
+
+export interface WorkflowProgress {
+  stage_ratio?: number | null
+  overall_ratio?: number | null
+  queue_position?: number | null
+  processed_ms?: number | null
+  total_ms?: number | null
+  detail?: string | null
 }
 
 export interface WorkflowTimelineEntry {

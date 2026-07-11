@@ -721,18 +721,6 @@ fn python_candidates(project_root: &Path) -> Vec<PythonCandidate> {
         });
     }
 
-    let workspace_venv = project_root
-        .join(".venv-qwen-smoke")
-        .join("Scripts")
-        .join("python.exe");
-    if workspace_venv.exists() {
-        local_candidates.push(PythonCandidate {
-            label: workspace_venv.display().to_string(),
-            program: workspace_venv.display().to_string(),
-            prefix_args: Vec::new(),
-        });
-    }
-
     if !local_candidates.is_empty() {
         return local_candidates;
     }

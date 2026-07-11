@@ -55,6 +55,7 @@ fn main() {
             workflow_v2_commands::workflow_v2_submit,
             workflow_v2_commands::workflow_v2_list,
             workflow_v2_commands::workflow_v2_get,
+            workflow_v2_commands::workflow_v2_clear,
             workflow_v2_commands::workflow_v2_control,
             workflow_v2_commands::workflow_v2_retry,
             workflow_v2_commands::workflow_v2_register_revision,

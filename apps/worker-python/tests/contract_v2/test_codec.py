@@ -71,6 +71,25 @@ class ContractV2CodecTests(unittest.TestCase):
         with self.assertRaises(ProtocolError):
             decode_request(json.dumps(payload).encode("utf-8"))
 
+    def test_workflow_clear_requires_operation_id_and_only_workflow_id(self) -> None:
+        payload = {
+            "protocol": "asr-local-workflow",
+            "protocol_version": 2,
+            "kind": "request",
+            "request_id": "req_clear",
+            "operation_id": "op_clear",
+            "method": "workflow.clear",
+            "params": {"workflow_id": "wf_done"},
+        }
+        self.assertEqual(decode_request(json.dumps(payload).encode("utf-8"))["params"], {"workflow_id": "wf_done"})
+        payload.pop("operation_id")
+        with self.assertRaises(ProtocolError):
+            decode_request(json.dumps(payload).encode("utf-8"))
+        payload["operation_id"] = "op_clear"
+        payload["params"]["delete_artifacts"] = True
+        with self.assertRaises(ProtocolError):
+            decode_request(json.dumps(payload).encode("utf-8"))
+
     def test_response_is_utf8_jsonl(self) -> None:
         raw = encode_response("req_1", ok=True, result={"message": "完成"})
         self.assertTrue(raw.endswith(b"\n"))

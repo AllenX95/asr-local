@@ -34,7 +34,7 @@ export class FakeWorkflowRuntime implements WorkflowRuntime {
     return {
       max_inflight_workflows: 3,
       pipeline_profiles: ['moss_transcribe_diarize', 'qwen3_asr_with_pyannote'],
-      methods: ['workflow.submit', 'workflow.list', 'workflow.get', 'workflow.control', 'workflow.retry', 'artifact.register_revision'],
+      methods: ['workflow.submit', 'workflow.list', 'workflow.get', 'workflow.clear', 'workflow.control', 'workflow.retry', 'artifact.register_revision'],
     }
   }
 
@@ -87,6 +87,14 @@ export class FakeWorkflowRuntime implements WorkflowRuntime {
     const snapshot = this.snapshots.get(workflowId)
     if (!snapshot) throw new Error('NOT_FOUND')
     return snapshot
+  }
+
+  async clear(workflowId: string): Promise<void> {
+    const snapshot = await this.get(workflowId)
+    if (!['completed', 'failed', 'cancelled', 'interrupted'].includes(snapshot.status)) {
+      throw new Error('WORKFLOW_NOT_TERMINAL')
+    }
+    this.snapshots.delete(workflowId)
   }
 
   async control(command: WorkflowControlCommand): Promise<WorkflowSnapshot> {
