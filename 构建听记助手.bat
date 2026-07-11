@@ -2,14 +2,14 @@
 setlocal
 
 chcp 65001 >nul
-title Build Tingji Assistant Tauri
+title Build Tingji Assistant Electron
 
 set "PROJECT_ROOT=%~dp0"
-set "DESKTOP_DIR=%PROJECT_ROOT%apps\desktop-tauri"
-set "APP_EXE=%DESKTOP_DIR%\src-tauri\target\release\asr-local-tauri.exe"
+set "DESKTOP_DIR=%PROJECT_ROOT%apps\desktop-electron"
+set "APP_EXE=%DESKTOP_DIR%\release-electron\win-unpacked\ASR Local.exe"
 
 if not exist "%DESKTOP_DIR%\package.json" (
-    echo Cannot find Tauri desktop project:
+    echo Cannot find Electron desktop project:
     echo %DESKTOP_DIR%
     echo.
     pause
@@ -28,10 +28,10 @@ if not exist "node_modules" (
     )
 )
 
-echo Building Tingji Assistant Tauri desktop...
+echo Building Tingji Assistant Electron desktop...
 echo Project: %PROJECT_ROOT%
 echo.
-call npm run tauri:build
+call npm run electron:package
 set "EXIT_CODE=%ERRORLEVEL%"
 popd >nul
 

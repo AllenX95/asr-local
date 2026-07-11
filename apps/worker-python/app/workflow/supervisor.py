@@ -59,7 +59,7 @@ class FakeSummaryGenerator:
 
 
 class WorkflowSupervisor:
-    """Phase 2 in-process supervisor; stdio/Tauri wiring remains a later adapter."""
+    """In-process workflow supervisor behind the versioned stdio adapter."""
 
     def __init__(
         self,

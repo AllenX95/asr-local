@@ -5,11 +5,11 @@ chcp 65001 >nul
 title Tingji Assistant
 
 set "PROJECT_ROOT=%~dp0"
-set "DESKTOP_DIR=%PROJECT_ROOT%apps\desktop-tauri"
-set "APP_EXE=%DESKTOP_DIR%\src-tauri\target\release\asr-local-tauri.exe"
+set "DESKTOP_DIR=%PROJECT_ROOT%apps\desktop-electron"
+set "APP_EXE=%DESKTOP_DIR%\release-electron\win-unpacked\ASR Local.exe"
 
 if exist "%APP_EXE%" (
-    echo Starting Tingji Assistant Tauri release...
+    echo Starting Tingji Assistant Electron release...
     echo %APP_EXE%
     echo.
     start "" "%APP_EXE%"
@@ -17,7 +17,7 @@ if exist "%APP_EXE%" (
 )
 
 if not exist "%DESKTOP_DIR%\package.json" (
-    echo Cannot find Tauri desktop project:
+    echo Cannot find Electron desktop project:
     echo %DESKTOP_DIR%
     echo.
     pause
@@ -39,7 +39,7 @@ if not exist "node_modules" (
 echo Release executable was not found. Starting development mode instead...
 echo Project: %PROJECT_ROOT%
 echo.
-call npm run tauri:dev
+call npm run electron:dev
 set "EXIT_CODE=%ERRORLEVEL%"
 popd >nul
 

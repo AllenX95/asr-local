@@ -1,1 +1,0 @@
-{"type":"run_job","payload":{"job_id":"job_v1_001","source_path":"D:\\recordings\\sample.wav","output_dir":"D:\\outputs","output_file_name":"sample.transcript.md","asr_backend":"local","language_mode":"auto","fixed_language":null,"enable_speaker_diarization":true,"context_text":"","terms":[],"replacements":[],"keep_fillers":true,"auto_punctuation":true}}

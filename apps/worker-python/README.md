@@ -29,16 +29,15 @@ desktop containers (WAV, MP3, AAC/M4A, FLAC, OGG/Opus and WebM) without relying
 on a globally installed ffmpeg. Set `ASR_LOCAL_FFMPEG` to an executable path
 only when an operator needs to use a specific ffmpeg binary.
 
-The existing desktop integration still starts the v1 worker by default. The
-independent v2 supervisor can be exercised without inference dependencies; its
-default `auto` mode selects native MOSS only when the model and runtime
-dependencies are available:
+The Electron desktop starts the Workflow Runtime v2 supervisor. It can be
+exercised without inference dependencies; `auto` selects native MOSS only when
+the model and runtime dependencies are available:
 
 ```text
 python -m app.main --contract v2
 ```
 
-v2 uses the shared contract assets under `contracts/workflow-v2/`. Its default
+The runtime uses the shared contract assets under `contracts/workflow-v2/`. Its default
 `auto` mode selects the native MOSS adapter when the pinned runtime and local
 model are available, and otherwise keeps the fake adapter available for
 development and contract testing.
@@ -57,13 +56,13 @@ v2 pipeline, but the canonical project `.venv` is MOSS-first because the Qwen
 package pins an older Transformers release. Keep a separate legacy runtime
 and pass it through `ASR_LOCAL_PYTHON` if that compatibility path is needed.
 
-The Tauri v2 client accepts `ASR_LOCAL_V2_PIPELINE_MODE=auto|production|fake`.
+The Electron host accepts `ASR_LOCAL_V2_PIPELINE_MODE=auto|production|fake`.
 The default is `auto`: it resolves to production when the MOSS model plus
 `torch`, `transformers`, and `soundfile` are available, and otherwise resolves
 to the fake adapter. Use `production` to make a missing dependency fail
 explicitly during a release gate.
 
 For a source checkout with a separate inference environment, set
-`ASR_LOCAL_PYTHON` to that environment's Python executable. The Tauri client
+`ASR_LOCAL_PYTHON` to that environment's Python executable. The Electron host
 uses the canonical `apps/worker-python/.venv` runtime before falling back to
 the system Python.

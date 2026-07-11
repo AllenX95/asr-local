@@ -1,1 +1,0 @@
-{"type":"job_failed","job_id":"job_v1_001","payload":{"reason":"test failure","user_message":"任务失败","diagnostic_detail":"test failure","stage":"failed"}}

@@ -218,7 +218,7 @@ Request：
   "params": {
     "supported_versions": [2],
     "client": {
-      "name": "asr-local-tauri",
+      "name": "asr-local-electron",
       "version": "0.2.0",
       "installation_id": "install-stable-uuid"
     }

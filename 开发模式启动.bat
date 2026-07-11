@@ -2,13 +2,13 @@
 setlocal
 
 chcp 65001 >nul
-title Tingji Assistant Tauri Dev Launcher
+title Tingji Assistant Electron Dev Launcher
 
 set "PROJECT_ROOT=%~dp0"
-set "DESKTOP_DIR=%PROJECT_ROOT%apps\desktop-tauri"
+set "DESKTOP_DIR=%PROJECT_ROOT%apps\desktop-electron"
 
 if not exist "%DESKTOP_DIR%\package.json" (
-    echo Cannot find Tauri desktop project:
+    echo Cannot find Electron desktop project:
     echo %DESKTOP_DIR%
     echo.
     pause
@@ -27,10 +27,10 @@ if not exist "node_modules" (
     )
 )
 
-echo Starting Tingji Assistant Tauri desktop...
+echo Starting Tingji Assistant Electron desktop...
 echo Project: %PROJECT_ROOT%
 echo.
-call npm run tauri:dev
+call npm run electron:dev
 set "EXIT_CODE=%ERRORLEVEL%"
 popd >nul
 

@@ -8,11 +8,10 @@ __pycache__/
 *.pyc*
 *.egg-info/
 .venv*/
-apps/desktop-tauri/node_modules/
-apps/desktop-tauri/dist/
-apps/desktop-tauri/dist-electron/
-apps/desktop-tauri/release-electron/
-apps/desktop-tauri/src-tauri/target/
+apps/desktop-electron/node_modules/
+apps/desktop-electron/dist/
+apps/desktop-electron/dist-electron/
+apps/desktop-electron/release-electron/
 /tmp_rust_check*
 /rmeta*/
 /rustc*/
