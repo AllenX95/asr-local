@@ -72,11 +72,13 @@ class ChunkedLocalTranscriber:
             return {
                 "kind": "transcript_markdown",
                 "text": path.read_text(encoding="utf-8"),
+                "warnings": result.get("warnings", []),
                 "diagnostics": {
                     "backend_id": self.backend_id,
                     "asr_model": result.get("asr_model"),
                     "segment_count": result.get("segments", 0),
                     "speaker_count": result.get("speakers", 0),
+                    "warnings": result.get("warnings", []),
                 },
             }
         finally:
