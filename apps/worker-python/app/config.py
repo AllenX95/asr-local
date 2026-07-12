@@ -5,8 +5,6 @@ from pathlib import Path
 import os
 import tomllib
 
-DEFAULT_LOCAL_ASR_MODEL = "qwen3_asr_1_7b"
-
 DEFAULT_QWEN_CONFIG = {
     "path": "models/Qwen/Qwen3-ASR-1.7B",
     "required": True,
