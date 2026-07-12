@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import json
 from pathlib import Path
+import shutil
 import sqlite3
 from threading import RLock
 from typing import Any, Iterator
@@ -22,12 +23,29 @@ class WorkflowRegistry:
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._prepare_database()
         self._lock = RLock()
         self._connection = sqlite3.connect(self.path, check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
         self._connection.execute("PRAGMA journal_mode=WAL")
         self._connection.execute("PRAGMA foreign_keys=ON")
         self._initialize()
+
+    def _prepare_database(self) -> None:
+        if not self.path.exists():
+            return
+        check = sqlite3.connect(self.path)
+        try:
+            result = check.execute("PRAGMA quick_check").fetchone()
+            if result is None or result[0] != "ok":
+                raise sqlite3.DatabaseError(f"workflow database integrity check failed: {result}")
+            version = int(check.execute("PRAGMA user_version").fetchone()[0])
+        finally:
+            check.close()
+        if version == 0:
+            backup = self.path.with_suffix(self.path.suffix + ".pre-v1.bak")
+            if not backup.exists():
+                shutil.copy2(self.path, backup)
 
     def close(self) -> None:
         with self._lock:
@@ -81,6 +99,7 @@ class WorkflowRegistry:
                 );
                 CREATE INDEX IF NOT EXISTS workflow_status_idx ON workflows(status, created_at DESC);
                 CREATE INDEX IF NOT EXISTS attempts_workflow_idx ON attempts(workflow_id, attempt_number DESC);
+                PRAGMA user_version=1;
                 """
             )
 

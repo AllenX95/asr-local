@@ -19,6 +19,6 @@ class ProfileRoutingTranscriber:
             return await self.cloud.transcribe(spec, attempt_id)
         if profile == "qwen3_asr_with_pyannote":
             if self.legacy is None:
-                raise RuntimeError("LEGACY_ADAPTER_UNAVAILABLE: use the v1 lane while the v2 legacy adapter is gated")
+                raise RuntimeError("LEGACY_ADAPTER_UNAVAILABLE: install the separate Legacy compatibility runtime or select MOSS")
             return await self.legacy.transcribe(spec, attempt_id)
         raise RuntimeError(f"UNSUPPORTED_PIPELINE_PROFILE: {profile}")

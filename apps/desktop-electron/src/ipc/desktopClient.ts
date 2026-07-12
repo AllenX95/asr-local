@@ -5,16 +5,12 @@ import type {
   HistoryItem,
   LocalAsrModelKey,
   ModelsConfig,
-  RunJobRequest,
   SavedFile,
-  SubmitJobResponse,
   SummaryProfile,
   SummaryProfilesState,
-  SummaryRequest,
   SummaryTemplate,
   WorkflowCatalogs,
-  TextFile,
-  WorkerUiEvent
+  TextFile
 } from './workerTypes';
 import { electronBridge } from './desktopBridge';
 
@@ -101,10 +97,6 @@ export const api = {
   deleteAsrProfile: (name: string) =>
     invokeDesktop<AsrProfilesState>('delete_asr_profile', { name }),
   workerHealthCheck: () => invokeDesktop<Record<string, unknown>>('worker_health_check'),
-  submitJob: (request: RunJobRequest) => invokeDesktop<SubmitJobResponse>('submit_job', { request }),
-  pauseLane: (laneId: number) => invokeDesktop<void>('pause_lane', { laneId }),
-  resumeLane: (laneId: number) => invokeDesktop<void>('resume_lane', { laneId }),
-  terminateLane: (laneId: number) => invokeDesktop<void>('terminate_lane', { laneId }),
   loadSummaryProfiles: () =>
     invokeDesktop<SummaryProfilesState>('load_summary_profiles', undefined, () => ({
       profiles: [],
@@ -120,7 +112,5 @@ export const api = {
     invokeDesktop<SummaryTemplate[]>('save_summary_template', { name, prompt }),
   deleteSummaryTemplate: (name: string) =>
     invokeDesktop<SummaryTemplate[]>('delete_summary_template', { name }),
-  generateSummary: (request: SummaryRequest) => invokeDesktop<string>('generate_summary', { request }),
-  listHistoryItems: (limit = 100) => invokeDesktop<HistoryItem[]>('list_history_items', { limit }, () => []),
-  listenWorkerEvents: (_handler: (event: WorkerUiEvent) => void) => Promise.resolve(() => undefined)
+  listHistoryItems: (limit = 100) => invokeDesktop<HistoryItem[]>('list_history_items', { limit }, () => [])
 };

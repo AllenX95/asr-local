@@ -45,8 +45,9 @@ export class WorkflowRuntimeClient extends EventEmitter {
   private async start(): Promise<void> {
     const workerDir = path.join(this.projectRoot, 'apps', 'worker-python')
     const configured = process.env.ASR_LOCAL_PYTHON?.trim()
+    const packagedPython = path.join(this.projectRoot, 'runtime', 'python', 'python.exe')
     const localPython = path.join(workerDir, '.venv', 'Scripts', 'python.exe')
-    const program = configured || (existsSync(localPython) ? localPython : process.platform === 'win32' ? 'python' : 'python3')
+    const program = configured || (existsSync(packagedPython) ? packagedPython : existsSync(localPython) ? localPython : process.platform === 'win32' ? 'python' : 'python3')
     if (configured && !existsSync(configured)) throw new Error(`ASR_LOCAL_PYTHON does not exist: ${configured}`)
     const pipelineMode = process.env.ASR_LOCAL_V2_PIPELINE_MODE ?? (process.env.NODE_ENV === 'production' ? 'production' : 'auto')
     const child = spawn(program, ['-X', 'utf8', '-m', 'app.main', '--contract', 'v2', '--pipeline-mode', pipelineMode], {

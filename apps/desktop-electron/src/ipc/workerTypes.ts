@@ -1,13 +1,4 @@
-export const WORKER_EVENT_NAME = 'worker-event';
-
-export type ViewKey = 'workflow' | 'workbench' | 'markdown' | 'summary' | 'history' | 'settings';
-
-export interface ReplacementRule {
-  wrong: string;
-  correct: string;
-}
-
-export type AsrBackend = 'local' | 'cloud';
+export type ViewKey = 'workflow' | 'markdown' | 'history' | 'settings';
 export type LocalAsrModelKey = 'qwen3_asr_1_7b' | 'moss_transcribe_diarize';
 
 export interface AsrCloudProfile {
@@ -22,60 +13,6 @@ export interface AsrCloudProfile {
 export interface AsrProfilesState {
   profiles: AsrCloudProfile[];
   last_profile: string | null;
-}
-
-export interface RunJobRequest {
-  job_id: string;
-  source_path: string;
-  output_dir: string;
-  output_file_name: string;
-  asr_backend: AsrBackend;
-  cloud_asr_profile: AsrCloudProfile | null;
-  language_mode: string;
-  fixed_language: string | null;
-  enable_speaker_diarization: boolean;
-  context_text: string;
-  terms: string[];
-  replacements: ReplacementRule[];
-  keep_fillers: boolean;
-  auto_punctuation: boolean;
-}
-
-export interface SubmitJobResponse {
-  job_id: string;
-  lane_id: number;
-  queued_ahead: number;
-}
-
-export interface JobResult {
-  worker_lane: number;
-  md_path: string;
-  transcript_json_path: string;
-  job_json_path: string;
-  job_dir: string;
-  source_path: string;
-  segments: number;
-  speakers: number;
-  total_ms: number;
-  detected_languages: string[];
-  asr_backend: string;
-  asr_profile_name: string | null;
-  asr_model: string;
-}
-
-export interface WorkerUiEvent {
-  event: 'queued' | 'progress' | 'completed' | 'failed';
-  job_id: string;
-  lane_id: number;
-  source_path: string;
-  stage: string;
-  progress: number;
-  detail: string;
-  processed_ms: number;
-  total_ms: number;
-  payload: Record<string, unknown>;
-  result: JobResult | null;
-  error: string | null;
 }
 
 export interface SessionLogPaths {

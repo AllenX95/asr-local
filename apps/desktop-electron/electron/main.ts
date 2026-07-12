@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { existsSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -16,10 +16,13 @@ if (app.isPackaged) {
   process.env.ASR_LOCAL_CONFIG_DIR ??= path.join(userDataDir, 'config')
 }
 const workerDir = path.join(projectRoot, 'apps', 'worker-python')
+const packagedPython = path.join(projectRoot, 'runtime', 'python', 'python.exe')
+const developmentPython = path.join(workerDir, '.venv', 'Scripts', 'python.exe')
+const pythonExecutable = process.env.ASR_LOCAL_PYTHON ?? (existsSync(packagedPython) ? packagedPython : developmentPython)
 const outputsDir = app.isPackaged ? path.join(app.getPath('documents'), 'ASR Local', 'outputs') : path.join(projectRoot, 'outputs')
 if (!process.env.ASR_LOCAL_V2_PIPELINE_MODE) process.env.ASR_LOCAL_V2_PIPELINE_MODE = app.isPackaged ? 'production' : 'auto'
 const runtime = new WorkflowRuntimeClient(projectRoot)
-const host = new HostServices(projectRoot, process.env.ASR_LOCAL_CONFIG_DIR, outputsDir)
+const host = new HostServices(projectRoot, process.env.ASR_LOCAL_CONFIG_DIR, outputsDir, process.env.ASR_LOCAL_LEGACY_CONFIG_DIR, pythonExecutable, process.env.ASR_LOCAL_LEGACY_OUTPUTS_DIR)
 let mainWindow: BrowserWindow | null = null
 let quitting = false
 const grantedPaths = new Set<string>()
@@ -88,7 +91,12 @@ async function invoke(command: string, args: Record<string, unknown>): Promise<u
     case 'workflow_v2_capabilities': return runtime.request('runtime.capabilities', {})
     case 'workflow_v2_catalogs': return host.catalogs()
     case 'workflow_v2_prompt_preview': return runtime.request('prompt.preview', args.input as Record<string, unknown>)
-    case 'workflow_v2_submit': return runtime.request('workflow.submit', { draft: args.draft }, requireString(args, 'operationId'))
+    case 'workflow_v2_submit': {
+      const draft = args.draft as Record<string, any>
+      assertAllowedPath(String(draft.source?.path ?? ''))
+      assertAllowedPath(String(draft.output?.directory ?? ''))
+      return runtime.request('workflow.submit', { draft: await host.trustedWorkflowDraft(draft) }, requireString(args, 'operationId'))
+    }
     case 'workflow_v2_list': return runtime.request('workflow.list', { statuses: args.statuses ?? [], cursor: null, limit: 100 })
     case 'workflow_v2_get': return runtime.request('workflow.get', { workflow_id: requireString(args, 'workflowId'), timeline_limit: args.timelineLimit ?? 200 })
     case 'workflow_v2_clear': return runtime.request('workflow.clear', { workflow_id: requireString(args, 'workflowId') }, requireString(args, 'operationId'))
@@ -102,6 +110,16 @@ async function invoke(command: string, args: Record<string, unknown>): Promise<u
 
 async function createWindow(): Promise<void> {
   await host.initialize()
+  const stateDir = process.env.ASR_LOCAL_STATE_DIR
+  const legacyOutputs = process.env.ASR_LOCAL_LEGACY_OUTPUTS_DIR
+  if (stateDir && legacyOutputs) {
+    const source = path.join(legacyOutputs, '.workflow', 'registry.sqlite3')
+    const target = path.join(stateDir, 'registry.sqlite3')
+    if (!existsSync(target) && existsSync(source)) {
+      await mkdir(stateDir, { recursive: true })
+      await copyFile(source, target)
+    }
+  }
   mainWindow = new BrowserWindow({
     width: 1360, height: 900, minWidth: 1100, minHeight: 720, show: false,
     webPreferences: { preload: path.join(appDir, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },

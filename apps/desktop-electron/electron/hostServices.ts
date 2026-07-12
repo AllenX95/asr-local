@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { copyFile, mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
+import { spawn } from 'node:child_process'
 import * as TOML from '@iarna/toml'
 
 type JsonObject = Record<string, any>
@@ -23,6 +24,17 @@ async function writeToml(filePath: string, value: JsonObject): Promise<void> {
 function stableId(prefix: string, name: string): string {
   const slug = name.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'legacy'
   return `${prefix}${slug}`
+}
+
+function providerBindingDigest(profile: JsonObject, authMode: string): string {
+  const canonical = JSON.stringify({
+    auth_mode: authMode,
+    base_url: String(profile.base_url ?? '').trim(),
+    model: String(profile.model ?? '').trim(),
+    profile_id: String(profile.id ?? ''),
+    profile_version: Math.max(Number(profile.version ?? 1), 1),
+  })
+  return createHash('sha256').update(canonical).digest('hex')
 }
 
 function decryptSecret(stored: unknown): string {
@@ -53,7 +65,7 @@ function normalizeProfile(raw: JsonObject, prefix: string): JsonObject {
 export class HostServices {
   private readonly configDir: string
   private readonly outputsRoot: string
-  constructor(private readonly projectRoot: string, configDir?: string, outputsRoot?: string) {
+  constructor(private readonly projectRoot: string, configDir?: string, outputsRoot?: string, private readonly legacyConfigDir?: string, private readonly pythonExecutable?: string, private readonly legacyOutputsRoot?: string) {
     this.configDir = configDir ?? path.join(projectRoot, 'config')
     this.outputsRoot = outputsRoot ?? path.join(projectRoot, 'outputs')
   }
@@ -67,6 +79,74 @@ export class HostServices {
       const source = path.join(defaultsDir, name)
       if (!existsSync(target) && existsSync(source) && target !== source) await copyFile(source, target)
     }
+    if (this.legacyConfigDir && path.resolve(this.legacyConfigDir) !== path.resolve(this.configDir)) {
+      for (const name of ['models.toml', 'summary_templates.toml', 'asr_profiles.toml', 'summary_profiles.toml']) {
+        const source = path.join(this.legacyConfigDir, name)
+        const target = path.join(this.configDir, name)
+        if (!existsSync(target) && existsSync(source)) await copyFile(source, target)
+      }
+      await this.migrateLegacyModelPaths()
+    }
+    await this.migrateLegacySecrets('asr_profiles.toml')
+    await this.migrateLegacySecrets('summary_profiles.toml')
+  }
+
+  private async migrateLegacyModelPaths(): Promise<void> {
+    if (!this.legacyConfigDir) return
+    const filePath = path.join(this.configDir, 'models.toml')
+    if (!existsSync(filePath)) return
+    const raw = await readToml(filePath, {})
+    const legacyRoot = path.dirname(path.resolve(this.legacyConfigDir))
+    let changed = false
+    for (const key of ['qwen3_asr_1_7b', 'moss_transcribe_diarize', 'pyannote_speaker_diarization']) {
+      const configured = String(raw[key]?.path ?? '').trim()
+      if (!configured || path.isAbsolute(configured)) continue
+      const absolute = path.resolve(legacyRoot, configured)
+      if (!existsSync(absolute)) continue
+      raw[key].path = absolute.replace(/\\/g, '/')
+      changed = true
+    }
+    if (!changed) return
+    const backup = `${filePath}.pre-electron.bak`
+    if (!existsSync(backup)) await copyFile(filePath, backup)
+    await writeToml(filePath, raw)
+  }
+
+  private async migrateLegacySecrets(name: string): Promise<void> {
+    const filePath = path.join(this.configDir, name)
+    if (!existsSync(filePath) || !this.pythonExecutable || process.platform !== 'win32') return
+    const raw = await readToml(filePath, { profiles: [] })
+    let changed = false
+    for (const profile of raw.profiles ?? []) {
+      const stored = String(profile.encrypted_api_key ?? '')
+      if (!stored || stored.startsWith('safe-storage:v1:')) continue
+      try {
+        const plaintext = await this.decryptLegacyDpapi(stored)
+        profile.encrypted_api_key = encryptSecret(plaintext)
+        changed = true
+      } catch (error) {
+        console.warn(`Credential in ${name} requires manual re-entry:`, error instanceof Error ? error.message : String(error))
+      }
+    }
+    if (!changed) return
+    const backup = `${filePath}.pre-electron.bak`
+    if (!existsSync(backup)) await copyFile(filePath, backup)
+    await writeToml(filePath, raw)
+  }
+
+  private decryptLegacyDpapi(ciphertext: string): Promise<string> {
+    const workerDir = path.join(this.projectRoot, 'apps', 'worker-python')
+    return new Promise((resolve, reject) => {
+      const child = spawn(this.pythonExecutable!, ['-X', 'utf8', '-m', 'app.diagnostics.dpapi'], { cwd: workerDir, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+      const stdout: Buffer[] = []; const stderr: Buffer[] = []
+      child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk)); child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
+      child.once('error', reject)
+      child.once('exit', (code) => {
+        if (code !== 0) { reject(new Error(`Legacy credential migration failed: ${Buffer.concat(stderr).toString('utf8').trim()}`)); return }
+        try { resolve(Buffer.from(Buffer.concat(stdout).toString('ascii'), 'base64').toString('utf8')) } catch (error) { reject(error) }
+      })
+      child.stdin.end(ciphertext, 'ascii')
+    })
   }
 
   async loadModelsConfig(): Promise<JsonObject> {
@@ -150,7 +230,7 @@ export class HostServices {
     const raw = await readToml(filePath, { profiles: [] })
     const profile = (raw.profiles ?? []).find((item: JsonObject) => String(item.id) === String(requestData.profile_id) && Number(item.version ?? 1) === Number(requestData.profile_version))
     if (!profile) throw new Error('CREDENTIAL_REJECTED: profile snapshot not found')
-    const expectedBinding = createHash('sha256').update(`${profile.id}\n${Math.max(Number(profile.version ?? 1), 1)}\n${String(profile.base_url ?? '').trim()}\n${String(profile.model ?? '').trim()}\nbearer`).digest('hex')
+    const expectedBinding = providerBindingDigest(profile, 'bearer')
     if (requestData.provider_binding_sha256 !== expectedBinding) throw new Error('CREDENTIAL_REJECTED: provider binding does not match the submitted profile snapshot')
     const secret = decryptSecret(profile.encrypted_api_key)
     if (!secret) throw new Error('CREDENTIAL_REJECTED: profile credential is unavailable or requires migration')
@@ -177,15 +257,43 @@ export class HostServices {
   }
 
   async catalogs(): Promise<JsonObject> {
-    const profiles = (await this.loadProfiles('summary')).profiles.map((profile: JsonObject) => { const authMode = profile.has_api_key ? 'bearer' : 'none'; return { ...profile, auth_mode: authMode, provider_binding_sha256: createHash('sha256').update(`${profile.id}\n${profile.version}\n${profile.base_url}\n${profile.model}\n${authMode}`).digest('hex') } })
+    const profiles = (await this.loadProfiles('summary')).profiles.map((profile: JsonObject) => { const authMode = profile.has_api_key ? 'bearer' : 'none'; return { ...profile, auth_mode: authMode, provider_binding_sha256: providerBindingDigest(profile, authMode) } })
     return { summary_profiles: profiles, summary_templates: await this.loadTemplates() }
+  }
+
+  async trustedWorkflowDraft(input: JsonObject): Promise<JsonObject> {
+    const draft = structuredClone(input)
+    const requested = draft.summary ?? {}
+    const raw = await readToml(path.join(this.configDir, 'summary_profiles.toml'), { profiles: [] })
+    const profile = (raw.profiles ?? []).find((item: JsonObject) => String(item.id) === String(requested.profile_id) && Math.max(Number(item.version ?? 1), 1) === Number(requested.profile_version))
+    if (!profile) throw new Error('SUMMARY_PROFILE_NOT_FOUND: trusted profile version is unavailable')
+    const authMode = profile.encrypted_api_key ? 'bearer' : 'none'
+    const templates = await this.loadTemplates()
+    const template = templates.find((item) => item.id === requested.template?.id && item.version === requested.template?.version)
+    if (!template) throw new Error('SUMMARY_TEMPLATE_NOT_FOUND: trusted template version is unavailable')
+    draft.summary = {
+      ...requested,
+      profile_id: profile.id,
+      profile_version: Math.max(Number(profile.version ?? 1), 1),
+      base_url: String(profile.base_url ?? '').trim(),
+      auth_mode: authMode,
+      model: String(profile.model ?? '').trim(),
+      model_source: 'profile_default',
+      credential_ref: authMode === 'bearer' ? `summary:${profile.id}` : null,
+      provider_binding_sha256: providerBindingDigest(profile, authMode),
+      template: { id: template.id, version: template.version, name: template.name, prompt_snapshot: template.prompt },
+    }
+    return draft
   }
 
   async history(limitInput: unknown): Promise<JsonObject[]> {
     const limit = limitInput == null ? 100 : Number(limitInput); if (!Number.isInteger(limit) || limit < 0) throw new Error('limit must be a non-negative integer')
-    const root = this.outputsRoot; if (!existsSync(root)) return []
+    const roots = [this.outputsRoot, this.legacyOutputsRoot].filter((root): root is string => Boolean(root && existsSync(root)))
+    if (!roots.length) return []
     const items: JsonObject[] = []; const skipped = new Set(['.jobs', 'logs', 'webview2-data', 'node_modules', 'target'])
     const walk = async (directory: string): Promise<void> => { for (const entry of await readdir(directory, { withFileTypes: true })) { if (entry.isDirectory()) { if (!skipped.has(entry.name) && !entry.name.startsWith('cargo-target-')) await walk(path.join(directory, entry.name)); continue } if (!entry.isFile() || path.extname(entry.name) !== '.md') continue; const filePath = path.join(directory, entry.name); const info = await stat(filePath); const suffix = entry.name.endsWith('.summary.md') ? '.summary.md' : entry.name.endsWith('.draft.md') ? '.draft.md' : entry.name.endsWith('.transcript.md') ? '.transcript.md' : ''; const kind = suffix === '.summary.md' ? 'summary' : suffix === '.draft.md' ? 'draft' : suffix === '.transcript.md' ? 'transcript' : 'markdown'; const companion = kind === 'summary' || kind === 'transcript' ? filePath.slice(0, -3) + '.json' : null; items.push({ id: filePath, kind, title: entry.name, path: filePath, companion_json_path: companion && existsSync(companion) ? companion : null, modified_ms: info.mtimeMs, size_bytes: info.size }) } }
-    await walk(root); return items.sort((a, b) => b.modified_ms - a.modified_ms).slice(0, limit)
+    for (const root of roots) await walk(root)
+    const unique = new Map(items.map((item) => [item.path, item]))
+    return [...unique.values()].sort((a, b) => b.modified_ms - a.modified_ms).slice(0, limit)
   }
 }

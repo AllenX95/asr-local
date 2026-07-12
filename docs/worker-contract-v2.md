@@ -349,7 +349,7 @@ Response：
 | `summary.auth_mode` | `none` 或 `bearer` |
 | `summary.model` | Profile 默认模型或 Summary Recipe 的显式覆盖；`model_source` 必须说明来源 |
 | `summary.credential_ref` | `bearer` 时必填 opaque identity，`none` 时必须为 `null` |
-| `summary.provider_binding_sha256` | 必须等于规范化 `{profile_id, base_url, auth_mode}` 的 RFC 8785 JCS SHA-256 |
+| `summary.provider_binding_sha256` | 必须等于按键名字典序序列化的 `{auth_mode, base_url, model, profile_id, profile_version}` 紧凑 JSON UTF-8 SHA-256 |
 | `summary.template.prompt_snapshot` | 必填，最多 32000 字符 |
 | `summary.context_strategy` | `auto`、`single_pass` 或 `hierarchical` |
 | `input_token_budget` | 正整数，由 Summary Profile 默认并可在能力范围内覆盖 |

@@ -12,6 +12,7 @@ apps/desktop-electron/node_modules/
 apps/desktop-electron/dist/
 apps/desktop-electron/dist-electron/
 apps/desktop-electron/release-electron/
+apps/desktop-electron/runtime/
 /tmp_rust_check*
 /rmeta*/
 /rustc*/

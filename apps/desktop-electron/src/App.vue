@@ -28,7 +28,9 @@ const currentView = computed(() => {
 });
 
 onMounted(() => {
-  void workflowStore.configure(new ElectronWorkflowRuntime());
+  void workflowStore.configure(new ElectronWorkflowRuntime()).catch((error) => {
+    store.setError('Workflow Runtime 启动失败', error);
+  });
   void store.initialize();
 });
 </script>

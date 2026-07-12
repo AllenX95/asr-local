@@ -1,6 +1,8 @@
 {
   "name": "asr-local-electron",
   "productName": "ASR Local",
+  "description": "Local-first speech-to-text and workflow desktop application",
+  "author": "ASR Local",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -10,8 +12,9 @@
     "electron:compile": "tsc -p tsconfig.electron.json",
     "electron:dev": "npm run electron:compile && concurrently -k \"vite --host 127.0.0.1 --port 1420\" \"wait-on http://127.0.0.1:1420 && cross-env ELECTRON_RENDERER_URL=http://127.0.0.1:1420 electron .\"",
     "electron:build": "npm run build && npm run electron:compile",
-    "electron:package": "npm run electron:build && electron-builder --win dir",
-    "electron:dist": "npm run electron:build && electron-builder --win nsis",
+    "runtime:build": "powershell -ExecutionPolicy Bypass -File ../../scripts/build/build_python_runtime.ps1",
+    "electron:package": "npm run runtime:build && npm run electron:build && electron-builder --win dir",
+    "electron:dist": "npm run runtime:build && npm run electron:build && electron-builder --win nsis",
     "build": "vue-tsc --noEmit && vite build",
     "typecheck": "vue-tsc --noEmit",
     "test": "vitest run",
@@ -26,7 +29,7 @@
     "@codemirror/state": "^6.5.2",
     "@codemirror/view": "^6.38.6",
     "@lucide/vue": "^1.17.0",
-    "dompurify": "^3.2.6",
+    "dompurify": "^3.4.11",
     "markdown-it": "^14.1.0",
     "pinia": "^2.3.1",
     "vue": "^3.5.13"
@@ -35,7 +38,7 @@
     "@vitejs/plugin-vue": "^5.2.1",
     "concurrently": "^9.2.1",
     "cross-env": "^7.0.3",
-    "electron": "^37.2.0",
+    "electron": "^43.1.0",
     "electron-builder": "^26.0.12",
     "typescript": "^5.8.3",
     "vite": "^6.3.5",
@@ -72,6 +75,10 @@
       {
         "from": "../../config/summary_templates.toml",
         "to": "runtime-root/config/summary_templates.toml"
+      },
+      {
+        "from": "runtime/python",
+        "to": "runtime-root/runtime/python"
       }
     ],
     "win": {

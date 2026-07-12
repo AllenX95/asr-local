@@ -12,6 +12,8 @@ if exist "%APP_EXE%" (
     echo Starting Tingji Assistant Electron release...
     echo %APP_EXE%
     echo.
+    set "ASR_LOCAL_LEGACY_CONFIG_DIR=%PROJECT_ROOT%config"
+    set "ASR_LOCAL_LEGACY_OUTPUTS_DIR=%PROJECT_ROOT%outputs"
     start "" "%APP_EXE%"
     exit /b 0
 )

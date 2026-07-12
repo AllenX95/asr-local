@@ -76,7 +76,7 @@ async function refreshAll(): Promise<void> {
       <header class="panel-header compact">
         <div>
           <h2>Workflow v2 任务</h2>
-          <small>registry 快照与最终产物，不与旧版 lane 历史混合。</small>
+          <small>Workflow registry 快照与最终产物；旧文件以只读历史形式单独展示。</small>
         </div>
       </header>
       <table>
