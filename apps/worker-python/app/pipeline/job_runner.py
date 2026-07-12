@@ -162,6 +162,7 @@ def run_job(payload: dict, emit=None, model_manager: ModelManager | None = None)
         )
         manager.close_pyannote_pipeline()
 
+    transcription_warnings: list[dict] = []
     transcript_segments = transcribe_segments(
         task=task,
         audio=audio,
@@ -171,6 +172,7 @@ def run_job(payload: dict, emit=None, model_manager: ModelManager | None = None)
         job_dir=job_dir,
         emit=emit,
         model_manager=manager,
+        warnings=transcription_warnings,
     )
 
     _emit(
@@ -276,6 +278,7 @@ def run_job(payload: dict, emit=None, model_manager: ModelManager | None = None)
         "asr_backend": task.asr_backend,
         "asr_profile_name": task.asr_profile_name,
         "asr_model": resolve_asr_model_name(task, manager),
+        "warnings": transcription_warnings,
     }
 
 
@@ -574,6 +577,7 @@ def transcribe_segments(
     job_dir: Path,
     emit=None,
     model_manager: ModelManager | None = None,
+    warnings: list[dict] | None = None,
 ) -> list[TranscriptSegment]:
     manager = model_manager or _MODEL_MANAGER
     check_job_control(task, job_dir, emit=emit, progress=0.36, total_ms=total_ms)
@@ -634,24 +638,70 @@ def transcribe_segments(
             chunk_origins[segment_index] = input_start_ms
             batch_inputs.append((segment_index, segment, audio_chunk))
 
-        if task.asr_backend == "cloud":
-            transcriptions = transcribe_cloud_audio_batch(
-                client=cloud_client,
-                batch_inputs=batch_inputs,
-                sample_rate=sample_rate,
-                context=context,
-                language=language,
-                job_id=task.job_id,
+        try:
+            if task.asr_backend == "cloud":
+                transcriptions = transcribe_cloud_audio_batch(
+                    client=cloud_client,
+                    batch_inputs=batch_inputs,
+                    sample_rate=sample_rate,
+                    context=context,
+                    language=language,
+                    job_id=task.job_id,
+                )
+            else:
+                transcriptions = transcribe_audio_batch(
+                    model=model,
+                    batch_inputs=batch_inputs,
+                    sample_rate=sample_rate,
+                    context=context,
+                    language=language,
+                    job_id=task.job_id,
+                )
+        except Exception as exc:
+            LOGGER.exception(
+                "ASR segment batch failed; continuing with warning placeholders | job_id=%s | batch_start=%s | batch_size=%s",
+                task.job_id,
+                batch_start,
+                len(batch_inputs),
             )
-        else:
-            transcriptions = transcribe_audio_batch(
-                model=model,
-                batch_inputs=batch_inputs,
-                sample_rate=sample_rate,
-                context=context,
-                language=language,
-                job_id=task.job_id,
+            for segment_index, segment, _audio_chunk in batch_inputs:
+                warning = {
+                    "code": "ASR_SEGMENT_FAILED",
+                    "segment_id": segment.segment_id,
+                    "segment_index": segment_index,
+                    "start_ms": segment.start_ms,
+                    "end_ms": segment.end_ms,
+                    "speaker": canonical_speaker_name(segment.speaker),
+                    "message": str(exc),
+                    "retryable": True,
+                }
+                if warnings is not None:
+                    warnings.append(warning)
+                output.append(
+                    TranscriptSegment(
+                        segment_id=segment.segment_id,
+                        speaker=canonical_speaker_name(segment.speaker),
+                        start_ms=segment.start_ms,
+                        end_ms=segment.end_ms,
+                        text="",
+                        normalized_text="",
+                        language=None,
+                    )
+                )
+            _emit(
+                emit,
+                task,
+                stage="transcribing",
+                progress=batch_progress,
+                total_ms=total_ms,
+                processed_ms=batch_processed_ms,
+                payload={
+                    "segment_error": "ASR_SEGMENT_FAILED",
+                    "segment_count": len(speaker_segments),
+                    "failed_segment_count": len(batch_inputs),
+                },
             )
+            continue
         check_job_control(
             task,
             job_dir,

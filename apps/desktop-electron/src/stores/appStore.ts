@@ -70,6 +70,7 @@ export const useAppStore = defineStore('app', {
           .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
           .map((result) => String(result.reason));
         if (failures.length) this.setError('部分初始化数据加载失败', failures.join('\n'));
+        void this.refreshRuntimeHealth();
       } catch (error) {
         this.setError('应用初始化失败', error);
       } finally {
@@ -110,6 +111,15 @@ export const useAppStore = defineStore('app', {
     },
 
     async refreshModels() { this.settings.models = await api.loadModelsConfig(); },
+    async refreshRuntimeHealth() {
+      try {
+        this.settings.health = await api.workerHealthCheck();
+        this.settings.healthError = '';
+      } catch (error) {
+        this.settings.health = null;
+        this.settings.healthError = String(error);
+      }
+    },
     async refreshAsrProfiles() {
       this.asrProfiles = await api.loadAsrProfiles();
       const selected = this.asrProfiles.last_profile || this.asrProfiles.profiles[0]?.name || '';

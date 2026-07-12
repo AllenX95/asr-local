@@ -167,6 +167,7 @@ export interface WorkflowCapabilities {
   max_inflight_workflows: number
   pipeline_profiles: string[]
   methods: string[]
+  model_readiness?: Record<string, unknown>
 }
 
 export interface PromptPreviewInput {

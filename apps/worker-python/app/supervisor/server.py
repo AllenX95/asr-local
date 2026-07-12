@@ -256,6 +256,7 @@ class V2StdioServer:
 
 
 def capabilities(*, requested_pipeline_mode: str = "auto", resolved_pipeline_mode: str | None = None) -> dict[str, Any]:
+    readiness = _model_readiness()
     return {
         "methods": [
             "runtime.capabilities",
@@ -279,7 +280,33 @@ def capabilities(*, requested_pipeline_mode: str = "auto", resolved_pipeline_mod
             "requested": requested_pipeline_mode,
             "resolved": resolved_pipeline_mode or resolve_pipeline_mode(requested_pipeline_mode),
         },
+        "model_readiness": readiness,
     }
+
+
+def _model_readiness() -> dict[str, Any]:
+    try:
+        from app.runtime.env import environment_snapshot
+
+        snapshot = environment_snapshot()
+        models = snapshot.get("models", {})
+        optional = snapshot.get("optional_modules", {})
+        return {
+            "qwen": {
+                "model_exists": bool(models.get("qwen3_asr_1_7b", {}).get("exists")),
+                "runtime_ready": bool(optional.get("qwen_asr") or optional.get("qwen_asr_runtime")),
+            },
+            "moss": {
+                "model_exists": bool(models.get("moss_transcribe_diarize", {}).get("exists")),
+                "runtime_ready": bool(optional.get("torch") and optional.get("transformers")),
+            },
+            "pyannote": {
+                "model_exists": bool(models.get("pyannote_speaker_diarization", {}).get("exists")),
+                "runtime_ready": bool(optional.get("torch") and optional.get("pyannote.audio")),
+            },
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
 
 
 def resolve_pipeline_mode(requested: str) -> str:

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from app.models.manager import ModelManager
-from app.pipeline.job_runner import build_context, normalize_speaker_segments, resolve_asr_model_name
+from app.pipeline.job_runner import build_context, normalize_speaker_segments, resolve_asr_model_name, transcribe_segments
 from app.schemas import ReplacementRule, SpeakerSegment, TaskSpec
 from pathlib import Path
+import tempfile
 
 
 class PipelineGuardTests(unittest.TestCase):
@@ -45,6 +47,34 @@ class PipelineGuardTests(unittest.TestCase):
         )
         manager = ModelManager(active_local_asr_model_override="moss_transcribe_diarize")
         self.assertEqual(resolve_asr_model_name(task, manager), "OpenMOSS-Team/MOSS-Transcribe-Diarize")
+
+    def test_segment_failure_keeps_placeholder_and_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            task = TaskSpec(
+                job_id="job",
+                source_path=root / "audio.wav",
+                output_dir=root,
+                output_file_name="audio.md",
+                local_asr_model="qwen3_asr_1_7b",
+                force_external_diarization=True,
+            )
+            segments = [SpeakerSegment("segment-0001", "SPEAKER_0", 0, 1_000, 1_000)]
+            warnings: list[dict] = []
+            with patch("app.pipeline.job_runner.transcribe_audio_batch", side_effect=RuntimeError("synthetic ASR failure")):
+                result = transcribe_segments(
+                    task,
+                    audio=[0.0] * 16_000,
+                    sample_rate=16_000,
+                    speaker_segments=segments,
+                    total_ms=1_000,
+                    job_dir=root,
+                    model_manager=ModelManager(active_local_asr_model_override="qwen3_asr_1_7b"),
+                    warnings=warnings,
+                )
+            self.assertEqual(len(result), 1)
+            self.assertEqual(result[0].text, "")
+            self.assertEqual(warnings[0]["code"], "ASR_SEGMENT_FAILED")
 
 
 if __name__ == "__main__":
