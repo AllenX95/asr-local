@@ -85,10 +85,6 @@
       {
         "from": "runtime/python",
         "to": "runtime-root/runtime/python"
-      },
-      {
-        "from": "runtime/qwen-python",
-        "to": "runtime-root/runtime/qwen-python"
       }
     ],
     "win": {

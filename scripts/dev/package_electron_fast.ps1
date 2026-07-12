@@ -2,9 +2,8 @@ $ErrorActionPreference = 'Stop'
 $desktopDir = (Resolve-Path (Join-Path $PSScriptRoot '..\..\apps\desktop-electron')).Path
 Push-Location $desktopDir
 try {
-    $runtimeQwen = Join-Path $desktopDir 'runtime\qwen-python\python.exe'
     $runtimeMain = Join-Path $desktopDir 'runtime\python\python.exe'
-    if (-not (Test-Path -LiteralPath $runtimeMain) -or -not (Test-Path -LiteralPath $runtimeQwen)) {
+    if (-not (Test-Path -LiteralPath $runtimeMain)) {
         npm run runtime:build
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }

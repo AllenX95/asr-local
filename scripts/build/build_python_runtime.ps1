@@ -6,17 +6,12 @@ $ErrorActionPreference = 'Stop'
 $ProjectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $DesktopDir = Join-Path $ProjectRoot 'apps\desktop-electron'
 $WorkerVenv = Join-Path $ProjectRoot 'apps\worker-python\.venv'
-$QwenVenv = Join-Path $ProjectRoot 'apps\worker-python\.venv-qwen'
 $RuntimeDir = Join-Path $DesktopDir 'runtime\python'
 $RuntimePython = Join-Path $RuntimeDir 'python.exe'
-$QwenRuntimeDir = Join-Path $DesktopDir 'runtime\qwen-python'
-$QwenRuntimePython = Join-Path $QwenRuntimeDir 'python.exe'
 $VersionFile = Join-Path $RuntimeDir 'ASR_LOCAL_RUNTIME_VERSION'
-$ExpectedVersion = 'python-3.12.2+chunked-dual-asr-v2'
-$QwenVersionFile = Join-Path $QwenRuntimeDir 'ASR_LOCAL_QWEN_RUNTIME_VERSION'
-$ExpectedQwenVersion = 'qwen-asr-0.0.6+transformers-4.57.6'
+$ExpectedVersion = 'python-3.12.2+qwen-pyannote-single-runtime-v1'
 
-if ((Test-Path $RuntimePython) -and (Test-Path $VersionFile) -and ((Get-Content -Raw $VersionFile).Trim() -eq $ExpectedVersion) -and (Test-Path $QwenRuntimePython) -and (Test-Path $QwenVersionFile) -and ((Get-Content -Raw $QwenVersionFile).Trim() -eq $ExpectedQwenVersion) -and -not $Force) {
+if ((Test-Path $RuntimePython) -and (Test-Path $VersionFile) -and ((Get-Content -Raw $VersionFile).Trim() -eq $ExpectedVersion) -and -not $Force) {
     Write-Host "Python runtime is already current: $RuntimeDir"
     exit 0
 }
@@ -32,14 +27,6 @@ if (Test-Path $RuntimeDir) {
         throw "Refusing to replace runtime outside $allowed"
     }
     Remove-Item -LiteralPath $RuntimeDir -Recurse -Force
-}
-if (Test-Path $QwenRuntimeDir) {
-    $resolvedQwen = [System.IO.Path]::GetFullPath($QwenRuntimeDir)
-    $allowedQwen = [System.IO.Path]::GetFullPath((Join-Path $DesktopDir 'runtime'))
-    if (-not $resolvedQwen.StartsWith($allowedQwen + [System.IO.Path]::DirectorySeparatorChar)) {
-        throw "Refusing to replace Qwen runtime outside $allowedQwen"
-    }
-    Remove-Item -LiteralPath $QwenRuntimeDir -Recurse -Force
 }
 
 $TempDir = Join-Path $ProjectRoot 'tmp\python-runtime-build'
@@ -68,28 +55,8 @@ import site
 Set-Content -LiteralPath $VersionFile -Value $ExpectedVersion -Encoding ascii
 
 Write-Host 'Validating portable runtime imports...'
-& $RuntimePython -X utf8 -c "import sqlite3, torch, transformers, soundfile, pyannote.audio; print('runtime-ok', torch.__version__)"
+& $RuntimePython -X utf8 -c "import sqlite3, torch, transformers, qwen_asr, soundfile, pyannote.audio; print('runtime-ok', torch.__version__, transformers.__version__)"
 if ($LASTEXITCODE -ne 0) {
-    throw "Portable runtime validation failed with exit code $LASTEXITCODE"
+    throw "Portable Python runtime validation failed with exit code $LASTEXITCODE"
 }
 Write-Host "Portable Python runtime ready: $RuntimeDir"
-
-if (-not (Test-Path (Join-Path $QwenVenv 'Lib\site-packages\qwen_asr'))) {
-    Write-Warning "Qwen runtime source is missing: $QwenVenv. Packaging will keep Qwen readiness disabled until ASR_LOCAL_QWEN_PYTHON is configured."
-    New-Item -ItemType Directory -Force -Path $QwenRuntimeDir | Out-Null
-    Set-Content -LiteralPath $QwenVersionFile -Value 'unavailable' -Encoding ascii
-} else {
-    Write-Host 'Building isolated Qwen runtime overlay...'
-    Copy-Item -LiteralPath $RuntimeDir -Destination $QwenRuntimeDir -Recurse -Force
-    $QwenSite = Join-Path $QwenRuntimeDir 'Lib\site-packages'
-    $QwenSourceSite = Join-Path $QwenVenv 'Lib\site-packages'
-    Get-ChildItem -LiteralPath $QwenSourceSite | Where-Object { $_.Name -notlike '*.pth' } | ForEach-Object {
-        Copy-Item -LiteralPath $_.FullName -Destination $QwenSite -Recurse -Force
-    }
-    Set-Content -LiteralPath $QwenVersionFile -Value $ExpectedQwenVersion -Encoding ascii
-    & $QwenRuntimePython -X utf8 -c "import qwen_asr, transformers; print('qwen-runtime-ok', transformers.__version__)"
-    if ($LASTEXITCODE -ne 0) {
-        throw "Portable Qwen runtime validation failed with exit code $LASTEXITCODE"
-    }
-    Write-Host "Portable Qwen runtime ready: $QwenRuntimeDir"
-}
