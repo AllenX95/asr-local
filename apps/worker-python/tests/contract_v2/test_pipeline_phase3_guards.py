@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from app.pipeline.job_runner import build_context, normalize_speaker_segments
+from app.models.manager import ModelManager
+from app.pipeline.job_runner import build_context, normalize_speaker_segments, resolve_asr_model_name
 from app.schemas import ReplacementRule, SpeakerSegment, TaskSpec
 from pathlib import Path
 
@@ -33,6 +34,17 @@ class PipelineGuardTests(unittest.TestCase):
         self.assertIn("customer meeting", context)
         self.assertIn("MOSS", context)
         self.assertNotIn("ASR Local", context)
+
+    def test_task_result_model_identity_uses_task_manager_override(self) -> None:
+        task = TaskSpec(
+            job_id="job",
+            source_path=Path("audio.wav"),
+            output_dir=Path("outputs"),
+            output_file_name="audio.md",
+            local_asr_model="moss_transcribe_diarize",
+        )
+        manager = ModelManager(active_local_asr_model_override="moss_transcribe_diarize")
+        self.assertEqual(resolve_asr_model_name(task, manager), "OpenMOSS-Team/MOSS-Transcribe-Diarize")
 
 
 if __name__ == "__main__":

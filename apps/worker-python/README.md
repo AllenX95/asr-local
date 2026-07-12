@@ -56,9 +56,11 @@ old workflow snapshots but are not emitted by the new desktop UI.
 
 Qwen3-ASR 0.0.6 currently pins Transformers 4.57.6 while the audited MOSS
 runtime uses Transformers 5.13.0. Do not force both pins into one environment:
-the worker reports `QWEN_RUNTIME_UNAVAILABLE` until a compatible Qwen runtime
-is installed or runtime isolation is configured. MOSS's Transformers runtime
-must remain intact.
+the worker keeps MOSS in the main runtime and sends Qwen segments to the
+isolated Python executable from `ASR_LOCAL_QWEN_PYTHON` (or the development
+default `apps/worker-python/.venv-qwen/Scripts/python.exe`). Install Qwen's
+official package and its CUDA-compatible dependencies in that environment.
+MOSS's Transformers runtime must remain intact.
 
 The Electron host accepts `ASR_LOCAL_V2_PIPELINE_MODE=auto|production|fake`.
 The default is `auto`: it resolves to production when Qwen3-ASR, Pyannote,

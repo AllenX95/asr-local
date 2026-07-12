@@ -275,7 +275,7 @@ def run_job(payload: dict, emit=None, model_manager: ModelManager | None = None)
         "detected_languages": detected_languages,
         "asr_backend": task.asr_backend,
         "asr_profile_name": task.asr_profile_name,
-        "asr_model": resolve_asr_model_name(task),
+        "asr_model": resolve_asr_model_name(task, manager),
     }
 
 

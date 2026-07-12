@@ -311,7 +311,7 @@ def resolve_pipeline_mode(requested: str) -> str:
             bool(qwen.get("exists"))
             and bool(pyannote.get("exists"))
             and torch_ready
-            and bool(optional.get("qwen_asr"))
+            and bool(optional.get("qwen_asr") or optional.get("qwen_asr_runtime"))
             and bool(optional.get("pyannote.audio"))
             and importlib.util.find_spec("soundfile") is not None
         )

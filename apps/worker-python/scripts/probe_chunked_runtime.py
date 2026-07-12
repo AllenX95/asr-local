@@ -46,8 +46,14 @@ def main() -> int:
             result["text"] = getattr(output[0], "text", "") if output else ""
         else:
             try:
-                manager.get_local_asr_model()
-                result["qwen_runtime"] = "imported"
+                output = manager.get_local_asr_model().transcribe(
+                    audio=[(audio, sample_rate)],
+                    context=[""],
+                    language=[None],
+                    return_time_stamps=False,
+                )
+                result["qwen_runtime"] = "ready"
+                result["text"] = getattr(output[0], "text", "") if output else ""
             except Exception as exc:
                 result["qwen_runtime"] = "unavailable"
                 result["qwen_error"] = str(exc)
