@@ -98,7 +98,7 @@ export class FakeWorkflowRuntime implements WorkflowRuntime {
 
   async clear(workflowId: string): Promise<void> {
     const snapshot = await this.get(workflowId)
-    if (!['completed', 'failed', 'cancelled', 'interrupted'].includes(snapshot.status)) {
+    if (!['completed', 'completed_with_warnings', 'failed', 'cancelled', 'interrupted'].includes(snapshot.status)) {
       throw new Error('WORKFLOW_NOT_TERMINAL')
     }
     this.snapshots.delete(workflowId)
@@ -132,7 +132,7 @@ export class FakeWorkflowRuntime implements WorkflowRuntime {
     const current = await this.get(command.workflow_id)
     if (current.attempt.attempt_id !== command.expected_attempt_id) throw new Error('STALE_ATTEMPT')
     if (current.sequence !== command.expected_sequence) throw new Error('SEQUENCE_CONFLICT')
-    if (!['failed', 'completed', 'interrupted'].includes(current.status)) throw new Error('INVALID_TRANSITION')
+    if (!['failed', 'completed', 'completed_with_warnings', 'interrupted'].includes(current.status)) throw new Error('INVALID_TRANSITION')
     const next = this.clone(current)
     next.sequence += 1
     next.status = 'queued'

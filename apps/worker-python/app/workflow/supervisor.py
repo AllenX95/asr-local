@@ -168,7 +168,7 @@ class WorkflowSupervisor:
         if existing is not None:
             return {**existing, "deduplicated": True}
         snapshot = self.registry.get_snapshot(params["workflow_id"])
-        if snapshot["status"] not in {"completed", "failed", "cancelled", "interrupted"}:
+        if snapshot["status"] not in {"completed", "completed_with_warnings", "failed", "cancelled", "interrupted"}:
             raise ValueError("WORKFLOW_NOT_TERMINAL")
         result = {"cleared": True, "workflow_id": params["workflow_id"]}
         self.registry.save_operation_result(
@@ -350,7 +350,7 @@ class WorkflowSupervisor:
                 self._enqueued_workflows.discard(workflow_id)
                 try:
                     final_status = self.registry.get_snapshot(workflow_id).get("status")
-                    if final_status in {"completed", "failed", "cancelled", "interrupted"}:
+                    if final_status in {"completed", "completed_with_warnings", "failed", "cancelled", "interrupted"}:
                         self._control_events.pop(workflow_id, None)
                 except WorkflowNotFoundError:
                     self._control_events.pop(workflow_id, None)
@@ -379,6 +379,7 @@ class WorkflowSupervisor:
         }
         _ensure_source_unchanged(execution_spec["source"])
         selected_transcript_id = running.get("recovery", {}).get("input_artifact_id")
+        transcript_result: dict[str, Any] = {}
         if retry_stage in {"summarizing", "writing_final"}:
             transcript_artifact = _select_transcript_artifact(running, selected_transcript_id)
             if transcript_artifact is None:
@@ -506,13 +507,13 @@ class WorkflowSupervisor:
             clock=self.clock(),
             input_artifact_ids=input_ids,
         )
-        completed["status"] = "completed"
+        completed["status"] = "completed_with_warnings" if _result_has_warnings(transcript_result) else "completed"
         completed["stage"] = "completed"
         completed["sequence"] += 1
         completed["progress"] = {**completed.get("progress", {}), "stage_ratio": 1.0, "overall_ratio": 1.0, "queue_position": None, "detail": "任务已完成，所有产物均已写入"}
         completed["timestamps"]["updated_at"] = self.clock()
         completed["timestamps"]["completed_at"] = completed["timestamps"]["updated_at"]
-        event = self._event(completed, "completed")
+        event = self._event(completed, "completed_with_warnings" if completed["status"] == "completed_with_warnings" else "completed")
         self.registry.save_snapshot(completed, event)
         await self._publish(event)
 
@@ -716,6 +717,14 @@ def _summary_checkpoint_result(result: dict[str, Any]) -> dict[str, Any]:
         "provider_request_keys": list(result.get("provider_request_keys", [])),
     }
     return {"kind": "summary_checkpoint_json", "text": json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"}
+
+
+def _result_has_warnings(result: dict[str, Any]) -> bool:
+    warnings = result.get("warnings")
+    if isinstance(warnings, list) and warnings:
+        return True
+    diagnostics = result.get("diagnostics")
+    return isinstance(diagnostics, dict) and bool(diagnostics.get("warnings"))
 
 
 def _reuse_artifact_snapshot(snapshot: dict[str, Any], artifact: dict[str, Any], *, clock: str) -> dict[str, Any]:

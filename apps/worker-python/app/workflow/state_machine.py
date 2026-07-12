@@ -11,6 +11,7 @@ STATUSES = {
     "paused",
     "waiting_for_secret",
     "completed",
+    "completed_with_warnings",
     "failed",
     "cancelled",
     "interrupted",
@@ -91,7 +92,7 @@ def retry_snapshot(
     updated_at: str,
     input_artifact_id: str | None = None,
 ) -> RetryDecision:
-    if snapshot.get("status") not in {"failed", "completed", "interrupted"}:
+    if snapshot.get("status") not in {"failed", "completed", "completed_with_warnings", "interrupted"}:
         raise WorkflowStateError("workflow retry requires failed, completed or interrupted status")
     if snapshot.get("attempt", {}).get("attempt_id") != expected_attempt_id:
         raise WorkflowStateError("STALE_ATTEMPT")

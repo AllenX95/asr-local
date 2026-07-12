@@ -316,6 +316,7 @@ async function saveArtifactRevision(): Promise<void> {
 
 function statusLabel(snapshot: WorkflowSnapshot): string {
   if (snapshot.status === 'completed') return '已完成';
+  if (snapshot.status === 'completed_with_warnings') return '已完成（有警告）';
   if (snapshot.status === 'failed') return '失败';
   if (snapshot.status === 'interrupted') return '已中断';
   if (snapshot.status === 'waiting_for_secret') return '等待凭据';

@@ -6,6 +6,7 @@ export type WorkflowStatus =
   | 'paused'
   | 'waiting_for_secret'
   | 'completed'
+  | 'completed_with_warnings'
   | 'failed'
   | 'cancelled'
   | 'interrupted'
