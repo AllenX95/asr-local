@@ -31,12 +31,18 @@
 - 已验证将 qwen 包强行装入 MOSS runtime 会导致导入错误，因此主 runtime 保持干净。
 - Qwen 1 秒内存零音频通过隔离子进程 smoke；输出为空符合静音输入预期，GPU 回落至 0 基线。
 
+### Shared chunked end-to-end
+
+- 使用 1 秒合成静音 WAV，通过 `ChunkedLocalTranscriber` + Pyannote + isolated Qwen 完成标准化、分块、显存释放、ASR 和 Markdown 导出。
+- 使用同一 WAV，通过 `ChunkedLocalTranscriber` + Pyannote + MOSS 完成同样阶段；MOSS 输出的 speaker 未覆盖 Pyannote speaker。
+- 两次任务均观察到 `diarizing → segmenting → releasing_model → transcribing` 阶段顺序。
+
 ## 发布 gate 状态
 
 | Gate | Qwen | MOSS |
 | --- | --- | --- |
 | Provider/分块契约 | 代码与单元测试通过 | 代码与单元测试通过 |
-| Pyannote 前置与显存释放 | 1 秒隔离 Qwen smoke 通过 | 短 smoke 通过 |
+| Pyannote 前置与显存释放 | 1 秒 chunked E2E 通过 | 1 秒 chunked E2E 通过 |
 | 10/30/90 分钟真实录音 | 未执行 | 未执行 |
 | CER/WER 与热词质量 | 未执行 | 未执行 |
 | 生产可选项 | 待长录音/质量 gate | 待长录音/质量 gate |
