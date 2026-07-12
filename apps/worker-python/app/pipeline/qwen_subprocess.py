@@ -162,8 +162,14 @@ def resolve_qwen_python() -> Path | None:
     configured = os.environ.get("ASR_LOCAL_QWEN_PYTHON", "").strip()
     if configured:
         return Path(configured).expanduser().resolve()
-    candidate = project_root() / "apps" / "worker-python" / ".venv-qwen" / "Scripts" / "python.exe"
-    return candidate.resolve() if candidate.is_file() else None
+    candidates = (
+        project_root() / "runtime" / "qwen-python" / "python.exe",
+        project_root() / "apps" / "worker-python" / ".venv-qwen" / "Scripts" / "python.exe",
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    return None
 
 
 def _dtype_name(dtype: Any) -> str:

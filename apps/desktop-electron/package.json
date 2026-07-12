@@ -69,6 +69,7 @@
         "to": "runtime-root/apps/worker-python",
         "filter": [
           "app/**/*",
+          "scripts/**/*",
           "pyproject.toml",
           "README.md"
         ]
@@ -84,6 +85,10 @@
       {
         "from": "runtime/python",
         "to": "runtime-root/runtime/python"
+      },
+      {
+        "from": "runtime/qwen-python",
+        "to": "runtime-root/runtime/qwen-python"
       }
     ],
     "win": {
