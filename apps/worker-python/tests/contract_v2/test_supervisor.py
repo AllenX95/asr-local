@@ -34,7 +34,7 @@ class ProgressBlockingTranscriber(BlockingTranscriber):
     async def transcribe(self, spec: dict, attempt_id: str, *, progress=None) -> dict:
         del spec, attempt_id
         if progress:
-            progress({"phase": "model_loading", "detail": "正在加载 MOSS 模型"})
+            progress({"phase": "model_loading", "detail": "正在加载 Qwen3-ASR 模型"})
         self.started.set()
         await self.release.wait()
         return {"kind": "transcript_markdown", "path": "", "text": "controlled transcript"}
@@ -56,7 +56,7 @@ def make_draft(source: Path, name: str = "sample") -> dict:
         "display_name": name,
         "source": {"path": str(source)},
         "transcription": {
-            "pipeline_profile": "moss_transcribe_diarize",
+            "pipeline_profile": "pyannote_qwen3_asr",
             "pipeline_profile_version": 1,
             "device_policy": "auto",
             "language": {"mode": "auto", "value": None},

@@ -264,7 +264,7 @@ def resolve_ffmpeg_executable() -> str:
             return candidate
 
     raise RuntimeError(
-        "Audio normalization requires ffmpeg. Install the moss-native runtime, "
+        "Audio normalization requires the worker inference runtime, "
         "install ffmpeg on PATH, or set ASR_LOCAL_FFMPEG to its executable path."
     )
 

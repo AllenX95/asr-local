@@ -75,35 +75,6 @@ class AudioNormalizationTests(unittest.TestCase):
         )
         return output
 
-    def test_moss_reader_normalizes_pcm_wav_to_model_input(self) -> None:
-        """A directly readable WAV must still be resampled for the 16 kHz MOSS model."""
-        from app.pipeline.moss_v2 import _read_audio_with_fallback
-
-        with tempfile.TemporaryDirectory() as raw_directory:
-            directory = Path(raw_directory)
-            source = self._create_tone(directory, "tone.wav", "pcm_s16le")
-
-            audio, sample_rate = _read_audio_with_fallback(source)
-
-        self.assertEqual(sample_rate, 16_000)
-        self.assertEqual(getattr(audio, "ndim", None), 1)
-        self.assertGreater(len(audio), 15_000)
-        self.assertLess(len(audio), 17_000)
-
-    def test_moss_reader_normalizes_aac_m4a_to_model_input(self) -> None:
-        from app.pipeline.moss_v2 import _read_audio_with_fallback
-
-        with tempfile.TemporaryDirectory() as raw_directory:
-            directory = Path(raw_directory)
-            source = self._create_tone(directory, "tone.m4a", "aac")
-
-            audio, sample_rate = _read_audio_with_fallback(source)
-
-        self.assertEqual(sample_rate, 16_000)
-        self.assertEqual(getattr(audio, "ndim", None), 1)
-        self.assertGreater(len(audio), 15_000)
-        self.assertLess(len(audio), 17_000)
-
     def test_mainstream_containers_normalize_to_model_input(self) -> None:
         from app.audio import TARGET_SR, load_and_normalize_audio
 

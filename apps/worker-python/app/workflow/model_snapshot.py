@@ -8,7 +8,6 @@ from app.config import load_models_config, project_root
 
 
 MODEL_IDS = {
-    "moss_transcribe_diarize": "OpenMOSS-Team/MOSS-Transcribe-Diarize",
     "qwen3_asr_1_7b": "Qwen/Qwen3-ASR-1.7B",
     "pyannote_speaker_diarization": "pyannote/speaker-diarization-community-1",
 }
@@ -17,16 +16,9 @@ MODEL_IDS = {
 def resolve_model_components(pipeline_profile: str) -> list[dict[str, Any]]:
     config = load_models_config()
     root = project_root()
-    if pipeline_profile == "moss_transcribe_diarize":
-        return [_component("transcriber", MODEL_IDS["moss_transcribe_diarize"], config.moss_transcribe_diarize.resolved_path(root))]
-    if pipeline_profile in {"qwen3_asr_with_pyannote", "pyannote_qwen3_asr"}:
+    if pipeline_profile == "pyannote_qwen3_asr":
         return [
             _component("transcriber", MODEL_IDS["qwen3_asr_1_7b"], config.qwen3_asr_1_7b.resolved_path(root)),
-            _component("diarization", MODEL_IDS["pyannote_speaker_diarization"], config.pyannote_speaker_diarization.resolved_path(root)),
-        ]
-    if pipeline_profile == "pyannote_moss_asr":
-        return [
-            _component("transcriber", MODEL_IDS["moss_transcribe_diarize"], config.moss_transcribe_diarize.resolved_path(root)),
             _component("diarization", MODEL_IDS["pyannote_speaker_diarization"], config.pyannote_speaker_diarization.resolved_path(root)),
         ]
     return []

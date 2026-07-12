@@ -98,9 +98,10 @@ class V2StdioServer:
         started = time.perf_counter()
         LOGGER.info("preloading production inference dependencies on main thread")
         import torch
-        from transformers import AutoModelForCausalLM, AutoProcessor
+        from pyannote.audio import Pipeline
+        from qwen_asr import Qwen3ASRModel
 
-        self._preloaded_inference_dependencies = (torch, AutoModelForCausalLM, AutoProcessor)
+        self._preloaded_inference_dependencies = (torch, Pipeline, Qwen3ASRModel)
         LOGGER.info("production inference dependencies ready | elapsed_seconds=%.3f", time.perf_counter() - started)
 
     def _production_supervisor(self) -> WorkflowSupervisor:
@@ -114,17 +115,14 @@ class V2StdioServer:
         """
         from app.pipeline.cloud_asr import CloudAsrTranscriber
         from app.pipeline.chunked_local import ChunkedLocalTranscriber
-        from app.pipeline.legacy_v2 import LegacyQwenPyannoteTranscriber
         from app.pipeline.router import ProfileRoutingTranscriber
         from app.summary.openai_compatible import OpenAICompatibleSummaryGenerator
 
         return WorkflowSupervisor(
             self.registry,
             transcriber=ProfileRoutingTranscriber(
-                moss=ChunkedLocalTranscriber(model_key="moss_transcribe_diarize", backend_id="pyannote_moss_asr"),
                 cloud=CloudAsrTranscriber(secret_provider=self.secret_provider),
-                legacy=LegacyQwenPyannoteTranscriber(),
-                qwen=ChunkedLocalTranscriber(model_key="qwen3_asr_1_7b", backend_id="pyannote_qwen3_asr"),
+                qwen=ChunkedLocalTranscriber(),
             ),
             summary_generator=OpenAICompatibleSummaryGenerator(secret_provider=self.secret_provider),
             event_sink=self._emit_event,
@@ -271,7 +269,7 @@ def capabilities(*, requested_pipeline_mode: str = "auto", resolved_pipeline_mod
             "secret.provide",
             "runtime.shutdown",
         ],
-        "pipeline_profiles": ["pyannote_qwen3_asr", "pyannote_moss_asr", "cloud_asr", "moss_transcribe_diarize", "qwen3_asr_with_pyannote"],
+        "pipeline_profiles": ["pyannote_qwen3_asr", "cloud_asr"],
         "max_inflight_workflows": 3,
         "event_recovery": "snapshot_reconcile",
         "secret_transport": "ephemeral_grant",
@@ -294,11 +292,7 @@ def _model_readiness() -> dict[str, Any]:
         return {
             "qwen": {
                 "model_exists": bool(models.get("qwen3_asr_1_7b", {}).get("exists")),
-                "runtime_ready": bool(optional.get("qwen_asr") or optional.get("qwen_asr_runtime")),
-            },
-            "moss": {
-                "model_exists": bool(models.get("moss_transcribe_diarize", {}).get("exists")),
-                "runtime_ready": bool(optional.get("torch") and optional.get("transformers")),
+                "runtime_ready": bool(optional.get("qwen_asr")),
             },
             "pyannote": {
                 "model_exists": bool(models.get("pyannote_speaker_diarization", {}).get("exists")),
@@ -338,7 +332,7 @@ def resolve_pipeline_mode(requested: str) -> str:
             bool(qwen.get("exists"))
             and bool(pyannote.get("exists"))
             and torch_ready
-            and bool(optional.get("qwen_asr") or optional.get("qwen_asr_runtime"))
+            and bool(optional.get("qwen_asr"))
             and bool(optional.get("pyannote.audio"))
             and importlib.util.find_spec("soundfile") is not None
         )
@@ -350,11 +344,7 @@ def resolve_pipeline_mode(requested: str) -> str:
 def _prompt_preview(params: dict[str, Any]) -> dict[str, Any]:
     prompt_input = params.get("prompt_input", {})
     profile = str(params.get("pipeline_profile", "pyannote_qwen3_asr"))
-    parts = [
-        "请将音频转写为文本，保留清晰的时间范围和自然段落。"
-        if profile in {"moss_transcribe_diarize", "pyannote_moss_asr"}
-        else "请准确转写音频内容，保留原意、专有名词和自然段落，不要添加音频中不存在的信息。"
-    ]
+    parts = ["请准确转写音频内容，保留原意、专有名词和自然段落，不要添加音频中不存在的信息。"]
     if prompt_input.get("recording_background"):
         parts.append(f"录音背景：\n{prompt_input['recording_background']}")
     if prompt_input.get("hotwords"):
@@ -365,9 +355,9 @@ def _prompt_preview(params: dict[str, Any]) -> dict[str, Any]:
     import hashlib
 
     return {
-        "compiler_id": "moss-prompt" if profile in {"moss_transcribe_diarize", "pyannote_moss_asr"} else "qwen-prompt",
+        "compiler_id": "qwen-prompt",
         "compiler_version": 1,
-        "base_template_version": "openmoss-official-2026-07-09" if profile in {"moss_transcribe_diarize", "pyannote_moss_asr"} else "qwen-segment-v1",
+        "base_template_version": "qwen-segment-v1",
         "compiled_text": compiled_text,
         "sha256": hashlib.sha256(compiled_text.encode("utf-8")).hexdigest(),
         "warnings": [],
@@ -376,7 +366,7 @@ def _prompt_preview(params: dict[str, Any]) -> dict[str, Any]:
 
 def _error_code(error: Exception) -> str:
     message = str(error)
-    for code in ("STALE_ATTEMPT", "SEQUENCE_CONFLICT", "INVALID_TRANSITION", "CONTROL_NOT_SUPPORTED", "WORKFLOW_NOT_TERMINAL", "NOT_FOUND", "CREDENTIAL_REJECTED", "CREDENTIAL_REQUIRED", "SOURCE_NOT_FOUND", "SOURCE_UNREADABLE", "SOURCE_CHANGED", "OUTPUT_CONFLICT", "SUMMARY_INPUT_TOO_LARGE", "SUMMARY_RESULT_UNKNOWN", "MODEL_SNAPSHOT_MISMATCH", "LEGACY_ADAPTER_UNAVAILABLE", "CLOUD_PROFILE_REQUIRED", "UNSUPPORTED_PIPELINE_PROFILE"):
+    for code in ("STALE_ATTEMPT", "SEQUENCE_CONFLICT", "INVALID_TRANSITION", "CONTROL_NOT_SUPPORTED", "WORKFLOW_NOT_TERMINAL", "NOT_FOUND", "CREDENTIAL_REJECTED", "CREDENTIAL_REQUIRED", "SOURCE_NOT_FOUND", "SOURCE_UNREADABLE", "SOURCE_CHANGED", "OUTPUT_CONFLICT", "SUMMARY_INPUT_TOO_LARGE", "SUMMARY_RESULT_UNKNOWN", "MODEL_SNAPSHOT_MISMATCH", "CLOUD_PROFILE_REQUIRED", "UNSUPPORTED_PIPELINE_PROFILE"):
         if code in message:
             return code
     return "INTERNAL"

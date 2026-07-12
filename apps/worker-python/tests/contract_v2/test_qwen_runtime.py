@@ -9,7 +9,7 @@ from app.models.manager import ModelManager
 class QwenRuntimeTests(unittest.TestCase):
     def test_qwen_uses_serial_segment_batch(self):
         self.assertEqual(
-            ModelManager(active_local_asr_model_override="qwen3_asr_1_7b").local_asr_batch_size(),
+            ModelManager().local_asr_batch_size(),
             1,
         )
 
@@ -17,7 +17,7 @@ class QwenRuntimeTests(unittest.TestCase):
     def test_qwen_loads_in_the_main_runtime(self, load_model):
         sentinel = object()
         load_model.return_value = sentinel
-        manager = ModelManager(active_local_asr_model_override="qwen3_asr_1_7b")
+        manager = ModelManager()
 
         self.assertIs(manager.get_qwen_model(), sentinel)
         load_model.assert_called_once_with(

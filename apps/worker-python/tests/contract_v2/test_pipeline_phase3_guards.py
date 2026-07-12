@@ -37,16 +37,16 @@ class PipelineGuardTests(unittest.TestCase):
         self.assertIn("MOSS", context)
         self.assertNotIn("ASR Local", context)
 
-    def test_task_result_model_identity_uses_task_manager_override(self) -> None:
+    def test_task_result_model_identity_is_qwen(self) -> None:
         task = TaskSpec(
             job_id="job",
             source_path=Path("audio.wav"),
             output_dir=Path("outputs"),
             output_file_name="audio.md",
-            local_asr_model="moss_transcribe_diarize",
+            local_asr_model="qwen3_asr_1_7b",
         )
-        manager = ModelManager(active_local_asr_model_override="moss_transcribe_diarize")
-        self.assertEqual(resolve_asr_model_name(task, manager), "OpenMOSS-Team/MOSS-Transcribe-Diarize")
+        manager = ModelManager()
+        self.assertEqual(resolve_asr_model_name(task, manager), "Qwen/Qwen3-ASR-1.7B")
 
     def test_segment_failure_keeps_placeholder_and_warning(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -69,7 +69,7 @@ class PipelineGuardTests(unittest.TestCase):
                     speaker_segments=segments,
                     total_ms=1_000,
                     job_dir=root,
-                    model_manager=ModelManager(active_local_asr_model_override="qwen3_asr_1_7b"),
+                    model_manager=ModelManager(),
                     warnings=warnings,
                 )
             self.assertEqual(len(result), 1)

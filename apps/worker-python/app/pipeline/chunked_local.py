@@ -21,16 +21,14 @@ _LOCAL_GPU_LANE = threading.Semaphore(1)
 
 
 class ChunkedLocalTranscriber:
-    def __init__(self, *, model_key: str, backend_id: str) -> None:
-        self.model_key = model_key
-        self.backend_id = backend_id
+    backend_id = "pyannote_qwen3_asr"
 
     async def transcribe(self, spec: dict[str, Any], attempt_id: str, *, progress=None) -> dict[str, Any]:
         return await asyncio.to_thread(self._transcribe_sync, spec, attempt_id, progress)
 
     def _transcribe_sync(self, spec: dict[str, Any], attempt_id: str, progress=None) -> dict[str, Any]:
         workflow_id = str(spec.get("workflow_id", "workflow-v2"))
-        manager = ModelManager(active_local_asr_model_override=self.model_key)
+        manager = ModelManager()
         _validate_snapshot_paths(spec, manager)
         staging_dir = Path(spec["output"]["directory"]) / ".staging" / f"chunked-{self.backend_id}-{attempt_id}"
         payload = {
@@ -43,7 +41,7 @@ class ChunkedLocalTranscriber:
             "fixed_language": spec["transcription"].get("language", {}).get("value"),
             "enable_speaker_diarization": True,
             "force_external_diarization": True,
-            "local_asr_model": self.model_key,
+            "local_asr_model": "qwen3_asr_1_7b",
             "context_text": _context_text(spec),
             "terms": spec["transcription"].get("prompt_input", {}).get("hotwords", []),
             "replacements": spec["transcription"].get("postprocess", {}).get("replacements", []),
@@ -132,7 +130,7 @@ def _validate_snapshot_paths(spec: dict[str, Any], manager: ModelManager) -> Non
     components = spec["transcription"].get("model_snapshot", {}).get("components", [])
     expected = {item.get("role"): Path(item.get("resolved_path", "")).resolve() for item in components}
     actual = {
-        "transcriber": (manager.qwen_path if manager.active_local_asr_model == "qwen3_asr_1_7b" else manager.moss_path).resolve(),
+        "transcriber": manager.qwen_path.resolve(),
         "diarization": manager.pyannote_path.resolve(),
     }
     for role, path in actual.items():

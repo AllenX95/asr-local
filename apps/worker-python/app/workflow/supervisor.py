@@ -599,9 +599,9 @@ def build_spec(draft: dict[str, Any], *, workflow_id: str) -> dict[str, Any]:
     prompt_input = transcription["prompt_input"]
     compiled_text = _compile_prompt(prompt_input, transcription["pipeline_profile"])
     transcription["prompt_snapshot"] = {
-        "compiler_id": "moss-prompt" if transcription["pipeline_profile"] in {"moss_transcribe_diarize", "pyannote_moss_asr"} else "legacy-prompt",
+        "compiler_id": "qwen-prompt",
         "compiler_version": 1,
-        "base_template_version": "openmoss-official-2026-07-09" if transcription["pipeline_profile"] in {"moss_transcribe_diarize", "pyannote_moss_asr"} else "legacy-v1",
+        "base_template_version": "qwen-segment-v1",
         "compiled_text": compiled_text,
         "sha256": hashlib.sha256(compiled_text.encode("utf-8")).hexdigest(),
     }
@@ -872,10 +872,8 @@ def _apply_control(snapshot: dict[str, Any], action: str, clock: str) -> dict[st
 
 
 def _compile_prompt(prompt_input: dict[str, Any], pipeline_profile: str) -> str:
-    if pipeline_profile in {"moss_transcribe_diarize", "pyannote_moss_asr"}:
-        base = "请将音频转写为文本，保留清晰的时间范围和自然段落。"
-    else:
-        base = "请准确转写音频内容，保留原意、专有名词和自然段落，不要添加音频中不存在的信息。"
+    del pipeline_profile
+    base = "请准确转写音频内容，保留原意、专有名词和自然段落，不要添加音频中不存在的信息。"
     parts = [base]
     if prompt_input.get("recording_background"):
         parts.append(f"录音背景：\n{prompt_input['recording_background']}")

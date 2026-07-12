@@ -57,7 +57,6 @@ def environment_snapshot() -> dict:
     root = project_root()
 
     qwen_path = models.qwen3_asr_1_7b.resolved_path(root)
-    moss_path = models.moss_transcribe_diarize.resolved_path(root)
     pyannote_path = models.pyannote_speaker_diarization.resolved_path(root)
 
     return {
@@ -73,19 +72,11 @@ def environment_snapshot() -> dict:
         },
         "torch_runtime": _torch_runtime_snapshot(),
         "models": {
-            "active_local_asr_model": models.active_local_asr_model,
             "qwen3_asr_1_7b": asdict(
                 _status_for(
                     qwen_path,
                     models.qwen3_asr_1_7b.required,
                     models.qwen3_asr_1_7b.description,
-                )
-            ),
-            "moss_transcribe_diarize": asdict(
-                _status_for(
-                    moss_path,
-                    models.moss_transcribe_diarize.required,
-                    models.moss_transcribe_diarize.description,
                 )
             ),
             "pyannote_speaker_diarization": asdict(

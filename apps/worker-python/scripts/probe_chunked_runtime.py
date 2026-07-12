@@ -19,14 +19,13 @@ from app.runtime.gpu_lifecycle import gpu_snapshot
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--backend", choices=("qwen3_asr_1_7b", "moss_transcribe_diarize"), default="qwen3_asr_1_7b")
     parser.add_argument("--seconds", type=float, default=1.0)
     args = parser.parse_args()
     sample_rate = 16_000
     audio = np.zeros(max(1, int(sample_rate * args.seconds)), dtype=np.float32)
-    manager = ModelManager(active_local_asr_model_override=args.backend)
+    manager = ModelManager()
     started = time.perf_counter()
-    result: dict[str, object] = {"backend": args.backend, "before": gpu_snapshot(manager.torch)}
+    result: dict[str, object] = {"backend": "pyannote_qwen3_asr", "before": gpu_snapshot(manager.torch)}
     try:
         turns = PyannoteDiarizationProvider(model_manager=manager).diarize(
             audio=audio,
@@ -35,28 +34,18 @@ def main() -> int:
             total_ms=int(args.seconds * 1000),
         )
         result["diarization_turns"] = [turn.to_dict() for turn in turns]
-        if args.backend == "moss_transcribe_diarize":
-            manager.close_pyannote_pipeline()
+        try:
             output = manager.get_local_asr_model().transcribe(
                 audio=[(audio, sample_rate)],
                 context=[""],
                 language=[None],
                 return_time_stamps=False,
             )
+            result["qwen_runtime"] = "ready"
             result["text"] = getattr(output[0], "text", "") if output else ""
-        else:
-            try:
-                output = manager.get_local_asr_model().transcribe(
-                    audio=[(audio, sample_rate)],
-                    context=[""],
-                    language=[None],
-                    return_time_stamps=False,
-                )
-                result["qwen_runtime"] = "ready"
-                result["text"] = getattr(output[0], "text", "") if output else ""
-            except Exception as exc:
-                result["qwen_runtime"] = "unavailable"
-                result["qwen_error"] = str(exc)
+        except Exception as exc:
+            result["qwen_runtime"] = "unavailable"
+            result["qwen_error"] = str(exc)
         result["elapsed_seconds"] = round(time.perf_counter() - started, 3)
         return_code = 0
     except Exception as exc:

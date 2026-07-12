@@ -123,7 +123,7 @@ def _validate_draft_shape(draft: dict[str, Any]) -> None:
         {"pipeline_profile", "pipeline_profile_version", "device_policy", "language", "prompt_input", "postprocess", "cloud_profile"},
         "draft.transcription",
     )
-    if transcription["pipeline_profile"] not in {"pyannote_qwen3_asr", "pyannote_moss_asr", "moss_transcribe_diarize", "qwen3_asr_with_pyannote", "cloud_asr"}:
+    if transcription["pipeline_profile"] not in {"pyannote_qwen3_asr", "cloud_asr"}:
         raise _error("Unsupported pipeline profile.", "draft.transcription.pipeline_profile")
     if not isinstance(transcription["pipeline_profile_version"], int) or transcription["pipeline_profile_version"] < 1:
         raise _error("pipeline_profile_version must be a positive integer.", "draft.transcription.pipeline_profile_version")
