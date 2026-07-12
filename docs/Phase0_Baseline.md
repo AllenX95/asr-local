@@ -1,4 +1,8 @@
-# Phase 0 基线与风险验证记录
+# Phase 0 基线与风险验证记录（已过时）
+
+> Superseded by `docs/superpowers/specs/2026-07-12-qwen-only-single-runtime-design.md`.
+> This historical record describes the removed MOSS dual-runtime experiment and
+> is not the current release architecture.
 
 日期：2026-07-10  
 工作目录：`D:\claude-projects\asr-local`
@@ -25,7 +29,7 @@ health snapshot 报告：
 - cloud ASR 标准库 client 可用。
 - MOSS 配置目录 `models/OpenMOSS-Team/MOSS-Transcribe-Diarize` 存在。
 - Qwen 配置目录和 pyannote 配置目录当前不存在。
-- 当前配置已把新产品默认切到 `qwen3_asr_1_7b`，新任务 profile 为 `pyannote_qwen3_asr`；MOSS 仅作为 `pyannote_moss_asr` 可选后端，发布 gate 仍独立执行。
+- 当前记录曾把 Qwen 设为默认、MOSS 设为可选；该双后端设计已被 Qwen-only 单 runtime 方案取代。
 - 当前 worker 支持命令仍为 `health_check`、`run_job`、`shutdown`，协议仍为 v1。
 
 ## 风险结论
@@ -61,7 +65,7 @@ changing the application's existing Python environment:
 - soundfile 0.14.0
 - model revision `d7231bbae2587a4af278735eb765b318c4f64edd`
 - `config.json` SHA-256 `2b2b7a6e61334152bdd7ecf8a4da3073b4940a097e193d1d2b22093e77535234`
-- the audited versions are recorded in [`config/moss-native.lock.toml`](../config/moss-native.lock.toml)
+- the audited MOSS versions were recorded in the now-removed `config/moss-native.lock.toml`
 - 1-second CPU native smoke: load 1.71s, inference 4.27s, RTF 4.27, no output truncation
 - v2 `--pipeline-mode production` end-to-end smoke: transcript artifact, local mock summary artifact, and completed event sequence all passed
 - v2 `--pipeline-mode auto` in the same environment resolved to `production`; the normal application environment still safely resolves to `fake` until its inference runtime is installed

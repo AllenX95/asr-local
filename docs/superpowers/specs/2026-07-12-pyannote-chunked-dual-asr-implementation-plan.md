@@ -1,4 +1,7 @@
-# Pyannote 前置分块与双 ASR 后端逐文件实施计划
+# Pyannote 前置分块与双 ASR 后端逐文件实施计划（已取代）
+
+> Superseded by `docs/superpowers/specs/2026-07-12-qwen-only-single-runtime-implementation-plan.md`.
+> This document describes the removed MOSS dual-backend migration.
 
 ## 1. 计划信息
 

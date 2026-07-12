@@ -1,4 +1,7 @@
-# ASR Local Electron 无 Rust 重构设计
+# ASR Local Electron 无 Rust 重构设计（部分取代）
+
+> The Electron migration remains historical context. Its MOSS runtime assumptions
+> are superseded by `docs/superpowers/specs/2026-07-12-qwen-only-single-runtime-design.md`.
 
 ## 1. 目标
 

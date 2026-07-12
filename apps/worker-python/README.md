@@ -11,15 +11,15 @@ Optional inference dependencies are declared under:
 pip install .[inference]
 ```
 
-For the validated native MOSS path, install the pinned runtime extra in an
-isolated environment. Qwen and Pyannote use the inference extra:
+Install the single pinned inference runtime used by supervisor, Pyannote, and
+Qwen3-ASR:
 
 ```text
-pip install .[moss-native]
+pip install .[inference]
 ```
 
 The runtime normalizes every imported source to 16 kHz PCM WAV before local
-inference. Both local profiles first run Pyannote speaker diarization, merge
+inference. The local profile first runs Pyannote speaker diarization, merges
 nearby turns, and split long turns into safe ASR chunks. The default `mixdown`
 strategy creates one high-quality mono stream; `split_stereo` is available only
 for separately recorded two-channel speakers. The source file is never replaced.
@@ -29,20 +29,18 @@ on a globally installed ffmpeg. Set `ASR_LOCAL_FFMPEG` to an executable path
 only when an operator needs to use a specific ffmpeg binary.
 
 The Electron desktop starts the Workflow Runtime v2 supervisor. It can be
-exercised without inference dependencies; `auto` selects native MOSS only when
-the model and runtime dependencies are available:
+exercised without inference dependencies; `auto` selects the local production
+runtime only when Qwen3-ASR, Pyannote, and their dependencies are available:
 
 ```text
 python -m app.main --contract v2
 ```
 
-The runtime uses the shared contract assets under `contracts/workflow-v2/`. Its default
-`auto` mode selects the local production runtime when Qwen3-ASR, Pyannote and
-their dependencies are available, and otherwise keeps the fake adapter available
-for development and contract testing.
-
-After the Phase 0 dependency gate, the native adapter can be selected explicitly
-for a MOSS/CPU smoke path:
+The runtime uses the shared contract assets under `contracts/workflow-v2/`. Its
+default `auto` mode selects the local production runtime when Qwen3-ASR,
+Pyannote, and their dependencies are available, and otherwise keeps the fake
+adapter available for development and contract testing. Explicit production
+mode makes a missing dependency fail during a release gate:
 
 ```text
 python -m app.main --contract v2 --pipeline-mode production
@@ -50,18 +48,12 @@ python -m app.main --contract v2 --pipeline-mode production
 
 The production mode requires the local inference dependencies. Summary and Cloud
 ASR bearer credentials use the ephemeral secret broker and trusted desktop
-bridge. New local profiles are `pyannote_qwen3_asr` (default) and
-`pyannote_moss_asr` (optional). Historical profile names remain readable for
-old workflow snapshots but are not emitted by the new desktop UI.
+bridge. The only local profile is `pyannote_qwen3_asr`.
 
-Qwen3-ASR 0.0.6 currently pins Transformers 4.57.6 while the audited MOSS
-runtime uses Transformers 5.13.0. Do not force both pins into one environment:
-the worker keeps MOSS in the main runtime and sends Qwen segments to the
-isolated Python executable from `ASR_LOCAL_QWEN_PYTHON` (or the packaged
-`runtime/qwen-python/python.exe` / development default
-`apps/worker-python/.venv-qwen/Scripts/python.exe`). Install Qwen's
-official package and its CUDA-compatible dependencies in that environment.
-MOSS's Transformers runtime must remain intact.
+Qwen3-ASR 0.0.6 and Pyannote run in the same Python environment. The main
+runtime uses the pinned Qwen-compatible Transformers version directly; there is
+no Qwen child process, `.venv-qwen`, `runtime/qwen-python`, or
+`ASR_LOCAL_QWEN_PYTHON` setting.
 
 The Electron host accepts `ASR_LOCAL_V2_PIPELINE_MODE=auto|production|fake`.
 The default is `auto`: it resolves to production when Qwen3-ASR, Pyannote,
@@ -69,7 +61,7 @@ The default is `auto`: it resolves to production when Qwen3-ASR, Pyannote,
 resolves to the fake adapter. Use `production` to make a missing dependency
 fail explicitly during a release gate.
 
-For a source checkout with a separate inference environment, set
-`ASR_LOCAL_PYTHON` to that environment's Python executable. The Electron host
-uses the canonical `apps/worker-python/.venv` runtime before falling back to
-the system Python.
+For a source checkout, the Electron host uses the canonical
+`apps/worker-python/.venv` runtime. `ASR_LOCAL_PYTHON` may point to another
+single environment when an operator needs to test a packaged or alternate
+Python installation.

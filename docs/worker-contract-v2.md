@@ -10,7 +10,7 @@ v2 负责：
 
 - 协议握手与能力发现；
 - 工作流任务提交、查询、列表、控制和阶段重试；
-- MOSS、Legacy 与云端转录链路的任务规格；
+- Qwen + Pyannote 与云端转录链路的任务规格；
 - 自动总结与最终产物状态；
 - 工作流快照和有序事件；
 - 断线对账、supervisor 重启和检查点恢复；
@@ -22,7 +22,7 @@ v2 不暴露：
 - Worker lane、线程、进程、GPU semaphore 或模型实例；
 - renderer 直接可用的 API key；
 - 转录正文或最终总结正文；正文通过产物路径读取；
-- MOSS、Qwen 或 pyannote 的内部对象和调用参数。
+- Qwen、Pyannote 或云端 client 的内部对象和调用参数。
 
 ## 2. 设计原则
 
@@ -255,7 +255,6 @@ Response：
       ],
       "pipeline_profiles": [
         "pyannote_qwen3_asr",
-        "pyannote_moss_asr",
         "cloud_asr"
       ],
       "max_inflight_workflows": 3,
@@ -337,7 +336,7 @@ Response：
 | --- | --- |
 | `display_name` | 1..200 个 Unicode 字符 |
 | `source.path` | Draft 只提交存在且可读的文件路径；supervisor 接受时解析规范路径并计算 size/mtime，可按策略增加 SHA-256，执行前再次验证 |
-| `pipeline_profile` | `pyannote_qwen3_asr`、`pyannote_moss_asr`、`cloud_asr`；旧 profile 仅用于历史读取 |
+| `pipeline_profile` | `pyannote_qwen3_asr`、`cloud_asr` |
 | `device_policy` | `auto`、`cpu`、`cuda`；云端链路必须为 `auto` |
 | `language.mode` | `auto` 或 `fixed`；`fixed` 时 `value` 必填 |
 | `recording_background` | 最多 4000 字符 |
@@ -388,10 +387,10 @@ supervisor 接受任务时生成并持久化：
       "extra_instruction": ""
     },
     "prompt_snapshot": {
-      "compiler_id": "moss-prompt",
+      "compiler_id": "qwen-prompt",
       "compiler_version": 1,
-      "base_template_version": "openmoss-official-2026-07-09",
-      "compiled_text": "请将音频转写为文本……热词提示：MOSS, ASR Local",
+      "base_template_version": "qwen-segment-v1",
+      "compiled_text": "请准确转写音频内容……热词提示：MOSS, ASR Local",
       "sha256": "hex-digest"
     },
     "postprocess": {

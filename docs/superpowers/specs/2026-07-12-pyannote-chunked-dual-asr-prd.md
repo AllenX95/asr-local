@@ -1,4 +1,7 @@
-# ASR Local：Pyannote 前置分块与双 ASR 后端重构 PRD
+# ASR Local：Pyannote 前置分块与双 ASR 后端重构 PRD（已取代）
+
+> Superseded by `docs/superpowers/specs/2026-07-12-qwen-only-single-runtime-design.md`.
+> This document describes the removed MOSS dual-backend product scope.
 
 ## 1. 文档信息
 

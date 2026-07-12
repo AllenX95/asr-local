@@ -1,4 +1,7 @@
-# Electron Real-Data Hot Debugging Design
+# Electron Real-Data Hot Debugging Design（MOSS 部分已取代）
+
+> MOSS-specific debugging paths in this historical design are superseded by the
+> Qwen-only runtime design: `docs/superpowers/specs/2026-07-12-qwen-only-single-runtime-design.md`.
 
 ## Status
 

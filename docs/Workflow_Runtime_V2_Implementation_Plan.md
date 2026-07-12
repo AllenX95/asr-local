@@ -1,6 +1,6 @@
 # WorkflowRuntime v2 分阶段开发计划
 
-> 历史规划文档：当前本地 ASR 方向以 [`2026-07-12-pyannote-chunked-dual-asr-prd.md`](superpowers/specs/2026-07-12-pyannote-chunked-dual-asr-prd.md) 和对应实施计划为准。Qwen3-ASR 现在是默认后端，MOSS 为可选后端，二者均先经 Pyannote 分块；本文中关于 MOSS 默认或整段长上下文的描述仅保留作历史记录。
+> 历史规划文档：本文的双 ASR 方案已被 [`2026-07-12-qwen-only-single-runtime-design.md`](superpowers/specs/2026-07-12-qwen-only-single-runtime-design.md) 取代。Qwen3-ASR + Pyannote 是当前唯一的本地链路；MOSS 描述仅保留作历史记录。
 
 本文档把 [PRD](../PRD_Workflow_Runtime_V2.md)、[Domain Glossary](../CONTEXT.md) 和 [Worker Contract v2](./worker-contract-v2.md) 拆成可执行阶段。计划以保留现有 Tauri 版本可运行、主线程拥有集成改动、跨层通过 contract fixture 协作为原则。
 

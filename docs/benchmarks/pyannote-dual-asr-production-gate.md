@@ -48,3 +48,8 @@
 | 生产可选项 | 待长录音/质量 gate | 待长录音/质量 gate |
 
 当前可以合并代码重构，但不能宣称双后端均已完成生产验收；还需要真实长录音质量和稳定性数据。
+# Superseded
+
+This historical dual-ASR gate is retained for audit context only. MOSS is no
+longer part of the product; the current architecture is the Qwen-only single
+runtime described in `docs/superpowers/specs/2026-07-12-qwen-only-single-runtime-design.md`.

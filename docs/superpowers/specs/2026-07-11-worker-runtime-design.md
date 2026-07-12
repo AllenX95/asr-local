@@ -1,4 +1,7 @@
-# Worker Runtime and MOSS Environment Design
+# Worker Runtime and MOSS Environment Design（已取代）
+
+> Superseded by `docs/superpowers/specs/2026-07-12-qwen-only-single-runtime-design.md`.
+> The current worker uses one Qwen + Pyannote runtime; MOSS isolation described here is historical.
 
 ## Goal
 
