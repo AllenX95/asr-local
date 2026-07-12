@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 from app.pipeline.segment_types import DiarizationTurn, PlannedSegment
 
 

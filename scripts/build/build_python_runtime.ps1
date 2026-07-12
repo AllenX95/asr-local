@@ -9,7 +9,7 @@ $WorkerVenv = Join-Path $ProjectRoot 'apps\worker-python\.venv'
 $RuntimeDir = Join-Path $DesktopDir 'runtime\python'
 $RuntimePython = Join-Path $RuntimeDir 'python.exe'
 $VersionFile = Join-Path $RuntimeDir 'ASR_LOCAL_RUNTIME_VERSION'
-$ExpectedVersion = 'python-3.12.2+moss-runtime-v1'
+$ExpectedVersion = 'python-3.12.2+chunked-dual-asr-v2'
 
 if ((Test-Path $RuntimePython) -and (Test-Path $VersionFile) -and ((Get-Content -Raw $VersionFile).Trim() -eq $ExpectedVersion) -and -not $Force) {
     Write-Host "Python runtime is already current: $RuntimeDir"
@@ -55,7 +55,7 @@ import site
 Set-Content -LiteralPath $VersionFile -Value $ExpectedVersion -Encoding ascii
 
 Write-Host 'Validating portable runtime imports...'
-& $RuntimePython -X utf8 -c "import sqlite3, torch, transformers, soundfile; print('runtime-ok', torch.__version__)"
+& $RuntimePython -X utf8 -c "import sqlite3, torch, transformers, soundfile, qwen_asr, pyannote.audio; print('runtime-ok', torch.__version__)"
 if ($LASTEXITCODE -ne 0) {
     throw "Portable runtime validation failed with exit code $LASTEXITCODE"
 }

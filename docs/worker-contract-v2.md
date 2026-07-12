@@ -254,8 +254,8 @@ Response：
         "runtime.shutdown"
       ],
       "pipeline_profiles": [
-        "moss_transcribe_diarize",
-        "qwen3_asr_with_pyannote",
+        "pyannote_qwen3_asr",
+        "pyannote_moss_asr",
         "cloud_asr"
       ],
       "max_inflight_workflows": 3,
@@ -283,7 +283,7 @@ Response：
     "path": "D:\\recordings\\customer-interview.wav"
   },
   "transcription": {
-    "pipeline_profile": "moss_transcribe_diarize",
+    "pipeline_profile": "pyannote_qwen3_asr",
     "pipeline_profile_version": 1,
     "device_policy": "auto",
     "language": {
@@ -337,7 +337,7 @@ Response：
 | --- | --- |
 | `display_name` | 1..200 个 Unicode 字符 |
 | `source.path` | Draft 只提交存在且可读的文件路径；supervisor 接受时解析规范路径并计算 size/mtime，可按策略增加 SHA-256，执行前再次验证 |
-| `pipeline_profile` | `moss_transcribe_diarize`、`qwen3_asr_with_pyannote`、`cloud_asr` |
+| `pipeline_profile` | `pyannote_qwen3_asr`、`pyannote_moss_asr`、`cloud_asr`；旧 profile 仅用于历史读取 |
 | `device_policy` | `auto`、`cpu`、`cuda`；云端链路必须为 `auto` |
 | `language.mode` | `auto` 或 `fixed`；`fixed` 时 `value` 必填 |
 | `recording_background` | 最多 4000 字符 |
@@ -377,7 +377,7 @@ supervisor 接受任务时生成并持久化：
     }
   },
   "transcription": {
-    "pipeline_profile": "moss_transcribe_diarize",
+    "pipeline_profile": "pyannote_qwen3_asr",
     "pipeline_profile_version": 1,
     "device_policy": "auto",
     "audio": { "channel_strategy": "mixdown" },
@@ -406,10 +406,17 @@ supervisor 接受任务时生成并持久化：
       "components": [
         {
           "role": "transcriber",
-          "model_id": "OpenMOSS-Team/MOSS-Transcribe-Diarize",
+          "model_id": "Qwen/Qwen3-ASR-1.7B",
           "revision": "locked-upstream-revision",
           "config_sha256": "hex-digest",
-          "resolved_path": "D:\\models\\MOSS-Transcribe-Diarize"
+          "resolved_path": "D:\\models\\Qwen3-ASR-1.7B"
+        },
+        {
+          "role": "diarization",
+          "model_id": "pyannote/speaker-diarization-community-1",
+          "revision": "locked-upstream-revision",
+          "config_sha256": "hex-digest",
+          "resolved_path": "D:\\models\\speaker-diarization-community-1"
         }
       ]
     }
@@ -447,7 +454,7 @@ supervisor 接受任务时生成并持久化：
 - Snapshot 一旦接受不可变。
 - Snapshot 不含 secret。
 - Prompt 与模板保存正文、版本和 digest，用于复现。
-- 本地 pipeline 的 `model_snapshot.components` 保存稳定模型 ID、revision、配置 digest 和解析路径；Legacy 必须同时包含 `transcriber` 与 `diarization` component。Cloud pipeline 的组件列表为空，身份由 `cloud_profile` 快照保存。
+- 本地 pipeline 的 `model_snapshot.components` 保存稳定模型 ID、revision、配置 digest 和解析路径；两个新本地 profile 都必须同时包含 `transcriber` 与 `diarization` component。旧 profile 仅为历史兼容。Cloud pipeline 的组件列表为空，身份由 `cloud_profile` 快照保存。
 - Summary Profile 拥有 endpoint、认证模式、credential ref 和默认模型；Summary Recipe 只有显式配置时才覆盖模型，`model_source` 记录最终来源。
 - `device_policy` 是用户意图，实际设备属于 RuntimePlan。
 - 任务执行前源文件 fingerprint 不一致时失败为 `SOURCE_CHANGED`。

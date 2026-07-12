@@ -25,7 +25,7 @@ health snapshot 报告：
 - cloud ASR 标准库 client 可用。
 - MOSS 配置目录 `models/OpenMOSS-Team/MOSS-Transcribe-Diarize` 存在。
 - Qwen 配置目录和 pyannote 配置目录当前不存在。
-- 当前配置已把新产品默认切到 `moss_transcribe_diarize`；但发布 gate 仍关闭，v1 Legacy 可显式切回 Qwen。
+- 当前配置已把新产品默认切到 `qwen3_asr_1_7b`，新任务 profile 为 `pyannote_qwen3_asr`；MOSS 仅作为 `pyannote_moss_asr` 可选后端，发布 gate 仍独立执行。
 - 当前 worker 支持命令仍为 `health_check`、`run_job`、`shutdown`，协议仍为 v1。
 
 ## 风险结论
@@ -48,7 +48,7 @@ MOSS prompt 依据官方 model card 与 prompt recipes：
 - [ ] 记录 CPU、目标 GPU 的 RTF、峰值 RAM/VRAM、模型加载时间和 1/2/3 工作流策略。
 - [ ] 完成 MOSS、Transformers、Torch、Qwen-ASR、pyannote 的依赖兼容矩阵。
 
-在上述条件关闭前，安装包不应宣称真实 MOSS 已验收；开发环境可使用 v2 fake/production feature flag，Legacy 仍可显式回退。
+在上述条件关闭前，安装包不应宣称真实 MOSS 已验收；开发环境可使用 v2 fake/production feature flag，Qwen 默认链路与 MOSS 可选链路分别验收。
 
 ## Native smoke evidence (2026-07-10)
 
