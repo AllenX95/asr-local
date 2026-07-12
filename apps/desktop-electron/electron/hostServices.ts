@@ -62,6 +62,10 @@ function normalizeProfile(raw: JsonObject, prefix: string): JsonObject {
   }
 }
 
+function normalizedProfileRecord(raw: JsonObject, prefix: string): JsonObject {
+  return { ...raw, ...normalizeProfile(raw, prefix) }
+}
+
 export class HostServices {
   private readonly configDir: string
   private readonly outputsRoot: string
@@ -215,7 +219,8 @@ export class HostServices {
   async secretForProfile(kind: 'asr' | 'summary', profileId: string, version: number): Promise<string> {
     const filePath = path.join(this.configDir, kind === 'asr' ? 'asr_profiles.toml' : 'summary_profiles.toml')
     const raw = await readToml(filePath, { profiles: [] })
-    const profile = (raw.profiles ?? []).find((item: JsonObject) => String(item.id) === profileId && Number(item.version ?? 1) === version)
+    const prefix = kind === 'asr' ? 'cloud-asr-profile-' : 'summary-profile-'
+    const profile = (raw.profiles ?? []).map((item: JsonObject) => normalizedProfileRecord(item, prefix)).find((item: JsonObject) => item.id === profileId && item.version === version)
     if (!profile) throw new Error('CREDENTIAL_REJECTED: profile snapshot not found')
     const secret = decryptSecret(profile.encrypted_api_key)
     if (!secret) throw new Error('CREDENTIAL_REJECTED: profile credential is unavailable or requires migration')
@@ -228,7 +233,8 @@ export class HostServices {
     if (!kind) throw new Error(`CREDENTIAL_REJECTED: unsupported purpose ${purpose}`)
     const filePath = path.join(this.configDir, kind === 'asr' ? 'asr_profiles.toml' : 'summary_profiles.toml')
     const raw = await readToml(filePath, { profiles: [] })
-    const profile = (raw.profiles ?? []).find((item: JsonObject) => String(item.id) === String(requestData.profile_id) && Number(item.version ?? 1) === Number(requestData.profile_version))
+    const prefix = kind === 'asr' ? 'cloud-asr-profile-' : 'summary-profile-'
+    const profile = (raw.profiles ?? []).map((item: JsonObject) => normalizedProfileRecord(item, prefix)).find((item: JsonObject) => item.id === String(requestData.profile_id) && item.version === Number(requestData.profile_version))
     if (!profile) throw new Error('CREDENTIAL_REJECTED: profile snapshot not found')
     const expectedBinding = providerBindingDigest(profile, 'bearer')
     if (requestData.provider_binding_sha256 !== expectedBinding) throw new Error('CREDENTIAL_REJECTED: provider binding does not match the submitted profile snapshot')
@@ -265,7 +271,7 @@ export class HostServices {
     const draft = structuredClone(input)
     const requested = draft.summary ?? {}
     const raw = await readToml(path.join(this.configDir, 'summary_profiles.toml'), { profiles: [] })
-    const profile = (raw.profiles ?? []).find((item: JsonObject) => String(item.id) === String(requested.profile_id) && Math.max(Number(item.version ?? 1), 1) === Number(requested.profile_version))
+    const profile = (raw.profiles ?? []).map((item: JsonObject) => normalizedProfileRecord(item, 'summary-profile-')).find((item: JsonObject) => item.id === String(requested.profile_id) && item.version === Number(requested.profile_version))
     if (!profile) throw new Error('SUMMARY_PROFILE_NOT_FOUND: trusted profile version is unavailable')
     const authMode = profile.encrypted_api_key ? 'bearer' : 'none'
     const templates = await this.loadTemplates()
