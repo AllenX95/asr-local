@@ -354,6 +354,23 @@ function updatedAt(snapshot: WorkflowSnapshot): string {
   const date = new Date(snapshot.timestamps.updated_at);
   return Number.isNaN(date.getTime()) ? snapshot.timestamps.updated_at : date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
+
+function phaseLabel(value: string | null | undefined): string {
+  const labels: Record<string, string> = {
+    starting_transcription: '启动转录',
+    audio_normalizing: '解码与标准化音频',
+    dependency_importing: '加载运行依赖',
+    model_loading: '加载 MOSS 模型权重',
+    processor_loading: '加载音频处理器',
+    model_moving_to_device: '迁移模型到推理设备',
+    feature_extracting: '提取音频特征',
+    generating: '语音识别与说话人分析',
+    formatting_transcript: '整理转录结果',
+    cloud_asr_request: '调用云端语音识别',
+    legacy_transcription: '兼容转录流程',
+  };
+  return value ? labels[value] || value : '等待阶段信息';
+}
 </script>
 
 <template>
@@ -371,6 +388,9 @@ function updatedAt(snapshot: WorkflowSnapshot): string {
       </header>
 
       <div v-if="error" class="workflow-error">{{ error }}</div>
+      <div v-if="workflowStore.runtimeStatus && ['unavailable', 'error'].includes(workflowStore.runtimeStatus.state)" class="workflow-error">
+        Runtime 不可用：{{ workflowStore.runtimeStatus.detail || '请查看 AppData/ASR Local/logs 中的诊断日志' }}
+      </div>
 
       <label>
         <span>音频文件</span>
@@ -514,6 +534,8 @@ function updatedAt(snapshot: WorkflowSnapshot): string {
                 <div v-if="snapshot.status === 'queued'"><dt>队列位置</dt><dd>{{ progressSummary(snapshot) }}</dd></div>
                 <div><dt>音频进度</dt><dd>{{ formatDuration(snapshot.progress.processed_ms) }} / {{ formatDuration(snapshot.progress.total_ms) }}</dd></div>
                 <div><dt>当前步骤</dt><dd>{{ snapshot.progress.detail || '等待工作进程上报详细信息' }}</dd></div>
+                <div v-if="snapshot.progress.phase"><dt>运行子阶段</dt><dd>{{ phaseLabel(snapshot.progress.phase) }}</dd></div>
+                <div v-if="snapshot.progress.heartbeat_at"><dt>最后心跳</dt><dd><Clock3 :size="14" />{{ updatedAt({ ...snapshot, timestamps: { ...snapshot.timestamps, updated_at: snapshot.progress.heartbeat_at } }) }}</dd></div>
                 <div><dt>更新时间</dt><dd><Clock3 :size="14" />{{ updatedAt(snapshot) }}</dd></div>
               </dl>
               <p v-if="snapshot.last_error" class="workflow-error">{{ snapshot.last_error.message }}</p>

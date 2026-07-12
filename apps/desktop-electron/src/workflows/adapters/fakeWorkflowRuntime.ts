@@ -10,7 +10,7 @@ import type {
   WorkflowRetryCommand,
   WorkflowSnapshot,
 } from '../types'
-import type { WorkflowEventHandler, WorkflowRuntime } from '../runtime'
+import type { RuntimeStatusHandler, WorkflowEventHandler, WorkflowRuntime } from '../runtime'
 
 export interface FakeRuntimeOptions {
   idFactory?: (prefix: string) => string
@@ -21,6 +21,7 @@ export interface FakeRuntimeOptions {
 export class FakeWorkflowRuntime implements WorkflowRuntime {
   private readonly snapshots = new Map<string, WorkflowSnapshot>()
   private readonly listeners = new Set<WorkflowEventHandler>()
+  private readonly runtimeStatusListeners = new Set<RuntimeStatusHandler>()
   private readonly idFactory: (prefix: string) => string
   private readonly clock: () => string
   private idCounter = 0
@@ -87,6 +88,12 @@ export class FakeWorkflowRuntime implements WorkflowRuntime {
     const snapshot = this.snapshots.get(workflowId)
     if (!snapshot) throw new Error('NOT_FOUND')
     return snapshot
+  }
+
+  subscribeRuntimeStatus(handler: RuntimeStatusHandler): () => void {
+    this.runtimeStatusListeners.add(handler)
+    handler({ state: 'ready', occurred_at: this.clock(), detail: 'Fake Runtime 已就绪' })
+    return () => this.runtimeStatusListeners.delete(handler)
   }
 
   async clear(workflowId: string): Promise<void> {

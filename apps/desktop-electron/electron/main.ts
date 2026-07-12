@@ -3,26 +3,25 @@ import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { existsSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ALLOWED_COMMANDS, DESKTOP_INVOKE_CHANNEL, WORKFLOW_EVENT_CHANNEL } from './channels.js'
+import { ALLOWED_COMMANDS, DESKTOP_INVOKE_CHANNEL, RUNTIME_STATUS_EVENT_CHANNEL, WORKFLOW_EVENT_CHANNEL } from './channels.js'
 import { WorkflowRuntimeClient } from './workflowRuntimeClient.js'
 import { HostServices } from './hostServices.js'
+import { resolveRuntimePaths } from './runtimePaths.js'
+import { createSessionLogger } from './sessionLogger.js'
 
 const appDir = path.dirname(fileURLToPath(import.meta.url))
-const desktopDir = path.resolve(appDir, '..')
-const projectRoot = process.env.ASR_LOCAL_PROJECT_ROOT ?? (app.isPackaged ? path.join(process.resourcesPath, 'runtime-root') : path.resolve(desktopDir, '..', '..'))
 const userDataDir = app.getPath('userData')
-if (app.isPackaged) {
-  process.env.ASR_LOCAL_STATE_DIR ??= path.join(userDataDir, 'workflow')
-  process.env.ASR_LOCAL_CONFIG_DIR ??= path.join(userDataDir, 'config')
-}
-const workerDir = path.join(projectRoot, 'apps', 'worker-python')
-const packagedPython = path.join(projectRoot, 'runtime', 'python', 'python.exe')
-const developmentPython = path.join(workerDir, '.venv', 'Scripts', 'python.exe')
-const pythonExecutable = process.env.ASR_LOCAL_PYTHON ?? (existsSync(packagedPython) ? packagedPython : developmentPython)
-const outputsDir = app.isPackaged ? path.join(app.getPath('documents'), 'ASR Local', 'outputs') : path.join(projectRoot, 'outputs')
+const paths = resolveRuntimePaths({ isPackaged: app.isPackaged, appDir, resourcesPath: process.resourcesPath, userDataDir, documentsDir: app.getPath('documents'), env: process.env, pathExists: existsSync })
+const { projectRoot, desktopDir, workerDir, pythonExecutable, outputsDir } = paths
+process.env.ASR_LOCAL_STATE_DIR = paths.stateDir
+process.env.ASR_LOCAL_CONFIG_DIR = paths.configDir
+process.env.ASR_LOCAL_OUTPUTS_DIR = paths.outputsDir
+const logger = createSessionLogger(paths.logsDir)
+process.env.ASR_LOCAL_WORKER_LOG ??= logger.paths.worker
 if (!process.env.ASR_LOCAL_V2_PIPELINE_MODE) process.env.ASR_LOCAL_V2_PIPELINE_MODE = app.isPackaged ? 'production' : 'auto'
-const runtime = new WorkflowRuntimeClient(projectRoot)
-const host = new HostServices(projectRoot, process.env.ASR_LOCAL_CONFIG_DIR, outputsDir, process.env.ASR_LOCAL_LEGACY_CONFIG_DIR, pythonExecutable, process.env.ASR_LOCAL_LEGACY_OUTPUTS_DIR)
+const runtime = new WorkflowRuntimeClient(projectRoot, { stderrSink: logger.workerStderr })
+const host = new HostServices(projectRoot, paths.configDir, outputsDir, process.env.ASR_LOCAL_LEGACY_CONFIG_DIR, pythonExecutable, process.env.ASR_LOCAL_LEGACY_OUTPUTS_DIR)
+logger.info('Electron session starting', { packaged: app.isPackaged, projectRoot, pythonExecutable, configDir: paths.configDir, stateDir: paths.stateDir, outputsDir, logsDir: paths.logsDir })
 let mainWindow: BrowserWindow | null = null
 let quitting = false
 const grantedPaths = new Set<string>()
@@ -49,7 +48,7 @@ function requireString(args: Record<string, unknown>, key: string): string {
 
 async function invoke(command: string, args: Record<string, unknown>): Promise<unknown> {
   switch (command) {
-    case 'get_app_info': return { project_root: projectRoot, outputs_dir: outputsDir, legacy_desktop_dir: desktopDir, worker_dir: workerDir, contract_version: 'workflow-contract-v2', logs: null }
+    case 'get_app_info': return { project_root: projectRoot, outputs_dir: outputsDir, legacy_desktop_dir: desktopDir, worker_dir: workerDir, contract_version: 'workflow-contract-v2', logs: { directory: paths.logsDir, desktop_log_path: logger.paths.main, worker_log_path: logger.paths.worker, stdio_log_path: logger.paths.main } }
     case 'select_audio_file': {
       const result = await dialog.showOpenDialog(mainWindow!, { properties: ['openFile'], filters: [{ name: 'Audio and video', extensions: ['wav', 'mp3', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'mp4', 'mov', 'mkv', 'webm'] }] })
       return result.canceled || !result.filePaths[0] ? null : grantPath(result.filePaths[0])
@@ -154,8 +153,13 @@ runtime.on('workflow-event', (payload: any) => {
     lease_scope: 'attempt',
   })).catch((error) => console.error('Credential grant rejected:', error))
 })
-runtime.on('protocol-error', (error) => console.error(error))
-runtime.on('error', (error) => console.error(error))
+runtime.on('protocol-error', (error) => { logger.error('Workflow protocol error', { message: String(error) }); console.error(error) })
+runtime.on('error', (error) => { logger.error('Workflow runtime error', { message: String(error) }); console.error(error) })
+runtime.on('unavailable', (detail) => logger.error('Workflow runtime unavailable', detail))
+runtime.on('runtime-status', (status) => {
+  logger.info('Workflow runtime status', status)
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(RUNTIME_STATUS_EVENT_CHANNEL, status)
+})
 
 app.whenReady().then(createWindow)
 app.on('window-all-closed', () => app.quit())

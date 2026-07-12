@@ -1,5 +1,6 @@
 export const DESKTOP_INVOKE_CHANNEL = 'asr-local:desktop:invoke'
 export const WORKFLOW_EVENT_CHANNEL = 'asr-local:workflow:event'
+export const RUNTIME_STATUS_EVENT_CHANNEL = 'asr-local:runtime:status'
 
 export const ALLOWED_COMMANDS = new Set([
   'get_app_info', 'select_audio_file', 'select_markdown_file', 'select_output_dir',

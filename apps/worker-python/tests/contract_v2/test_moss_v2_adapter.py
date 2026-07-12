@@ -90,13 +90,15 @@ class MossV2AdapterTests(unittest.TestCase):
                 },
                 "runtime_plan": {"resolved_device": "cpu", "dtype": "float32"},
             }
+            phases: list[str] = []
             with patch("app.pipeline.moss_v2._normalize_for_moss", return_value=normalized):
-                result = transcriber._transcribe_sync(spec, "att_1")
+                result = transcriber._transcribe_sync(spec, "att_1", progress=lambda item: phases.append(item["phase"]))
 
         self.assertEqual(fake_adapter.calls[0]["audio"], [(normalized.streams[0].audio, 16000), (normalized.streams[1].audio, 16000)])
         self.assertEqual(fake_adapter.calls[0]["context"], ["context", "context"])
         self.assertIn("Channel 1 / S01: left", result["text"])
         self.assertIn("Channel 2 / S02: right", result["text"])
+        self.assertEqual(phases, ["audio_normalizing", "model_loading", "generating", "formatting_transcript"])
 
 
 if __name__ == "__main__":

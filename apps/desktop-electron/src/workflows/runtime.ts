@@ -6,11 +6,13 @@ import type {
   WorkflowControlCommand,
   WorkflowDraft,
   WorkflowEvent,
+  RuntimeStatusEvent,
   WorkflowRetryCommand,
   WorkflowSnapshot,
 } from './types'
 
 export type WorkflowEventHandler = (event: WorkflowEvent) => void
+export type RuntimeStatusHandler = (event: RuntimeStatusEvent) => void
 export type Unsubscribe = () => void
 
 /** Platform-neutral seam implemented by Electron and test adapters. */
@@ -25,4 +27,5 @@ export interface WorkflowRuntime {
   retry(command: WorkflowRetryCommand): Promise<WorkflowSnapshot>
   registerRevision(command: ArtifactRevisionCommand): Promise<WorkflowSnapshot>
   subscribe(handler: WorkflowEventHandler): Unsubscribe
+  subscribeRuntimeStatus(handler: RuntimeStatusHandler): Unsubscribe
 }

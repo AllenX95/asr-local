@@ -50,7 +50,7 @@ class MossTranscriptSegment:
 
 
 class MossTranscribeDiarizeAdapter:
-    def __init__(self, path: Path, torch_module, device, dtype) -> None:
+    def __init__(self, path: Path, torch_module, device, dtype, progress=None) -> None:
         self.path = path
         self.torch = torch_module
         self.device = device
@@ -59,6 +59,11 @@ class MossTranscribeDiarizeAdapter:
         self._processor = None
         self._loaded_device = None
         self._loaded_dtype = None
+        self._progress = progress
+
+    def _report(self, phase: str, detail: str) -> None:
+        if self._progress:
+            self._progress({"phase": phase, "detail": detail})
 
     def transcribe(
         self,
@@ -115,6 +120,7 @@ class MossTranscribeDiarizeAdapter:
             self.device,
             self.dtype,
         )
+        self._report("model_loading", "正在从本地磁盘加载 MOSS 权重")
         try:
             model = AutoModelForCausalLM.from_pretrained(
                 str(self.path),
@@ -128,6 +134,7 @@ class MossTranscribeDiarizeAdapter:
                 torch_dtype="auto",
             )
 
+        self._report("processor_loading", "正在加载 MOSS 音频处理器")
         try:
             processor = AutoProcessor.from_pretrained(
                 str(self.path),
@@ -140,12 +147,14 @@ class MossTranscribeDiarizeAdapter:
                 trust_remote_code=True,
             )
 
+        self._report("model_moving_to_device", f"正在将 MOSS 模型迁移到 {self.device}")
         self._model = model.to(dtype=self.dtype).to(self.device).eval()
         self._processor = processor
         self._loaded_device = self.device
         self._loaded_dtype = self.dtype
 
     def _transcribe_one(self, item: _MossBatchItem) -> SimpleNamespace:
+        self._report("feature_extracting", "正在提取音频特征")
         prompt = self._build_prompt(item.context, item.language)
         text = self._processor.apply_chat_template(
             [
@@ -176,6 +185,7 @@ class MossTranscribeDiarizeAdapter:
             "max_new_tokens": self._max_new_tokens(item),
             "do_sample": False,
         }
+        self._report("generating", "正在生成带时间戳与说话人的转录")
         with self.torch.inference_mode(), self._autocast_context():
             output_ids = self._model.generate(**generate_kwargs)[0][prompt_len:]
 

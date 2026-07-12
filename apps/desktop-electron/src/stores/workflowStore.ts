@@ -2,7 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { reduceWorkflowEvent } from '../workflows/reducer'
 import type { WorkflowRuntime } from '../workflows/runtime'
-import type { ArtifactRevisionCommand, WorkflowDraft, WorkflowEvent, WorkflowSnapshot } from '../workflows/types'
+import type { ArtifactRevisionCommand, RuntimeStatusEvent, WorkflowDraft, WorkflowEvent, WorkflowSnapshot } from '../workflows/types'
 
 /**
  * Workflow state is keyed by workflow identity. It does not know about lanes,
@@ -15,7 +15,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const selectedWorkflowId = ref<string | null>(null)
   const capabilities = ref<Awaited<ReturnType<WorkflowRuntime['capabilities']>> | null>(null)
   const subscribed = ref(false)
+  const runtimeStatus = ref<RuntimeStatusEvent | null>(null)
   let unsubscribe: (() => void) | null = null
+  let unsubscribeRuntimeStatus: (() => void) | null = null
 
   const workflows = computed(() => Object.values(workflowsById.value).sort((a, b) => {
     const left = a.timestamps.created_at
@@ -39,8 +41,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   async function configure(nextRuntime: WorkflowRuntime): Promise<void> {
     unsubscribe?.()
+    unsubscribeRuntimeStatus?.()
     runtime.value = nextRuntime
     unsubscribe = nextRuntime.subscribe(reduceEvent)
+    unsubscribeRuntimeStatus = nextRuntime.subscribeRuntimeStatus((status) => { runtimeStatus.value = status })
     subscribed.value = true
     const [runtimeCapabilities, snapshots] = await Promise.all([nextRuntime.capabilities(), nextRuntime.list()])
     capabilities.value = runtimeCapabilities
@@ -105,6 +109,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     workflows,
     selectedWorkflowId,
     capabilities,
+    runtimeStatus,
     subscribed,
     configure,
     submit,

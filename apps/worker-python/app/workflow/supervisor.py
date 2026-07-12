@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+import inspect
 import json
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
@@ -19,7 +20,7 @@ from .state_machine import create_initial_snapshot, mark_interrupted, retry_snap
 
 
 class Transcriber(Protocol):
-    async def transcribe(self, spec: dict[str, Any], attempt_id: str) -> dict[str, Any]: ...
+    async def transcribe(self, spec: dict[str, Any], attempt_id: str, *, progress: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]: ...
 
 
 class SummaryGenerator(Protocol):
@@ -35,7 +36,8 @@ class FakeTranscriber:
     active: int = 0
     peak_active: int = 0
 
-    async def transcribe(self, spec: dict[str, Any], attempt_id: str) -> dict[str, Any]:
+    async def transcribe(self, spec: dict[str, Any], attempt_id: str, *, progress=None) -> dict[str, Any]:
+        del progress
         del spec, attempt_id
         self.active += 1
         self.peak_active = max(self.peak_active, self.active)
@@ -72,6 +74,7 @@ class WorkflowSupervisor:
         clock: Callable[[], str] | None = None,
         event_sink: EventSink | None = None,
         hardware: HardwareSnapshot | None = None,
+        heartbeat_interval_seconds: float = 10.0,
     ) -> None:
         if max_inflight < 1:
             raise ValueError("max_inflight must be positive")
@@ -83,6 +86,7 @@ class WorkflowSupervisor:
         self.clock = clock or _now
         self.event_sink = event_sink
         self.hardware = hardware or profile_hardware()
+        self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self._queue: asyncio.Queue[tuple[str, str | None]] = asyncio.Queue()
         self._workers: list[asyncio.Task[None]] = []
         self._started = False
@@ -90,6 +94,7 @@ class WorkflowSupervisor:
         self._event_lock = asyncio.Lock()
         self._control_events: dict[str, asyncio.Event] = {}
         self._enqueued_workflows: set[str] = set()
+        self._mutation_locks: dict[str, asyncio.Lock] = {}
 
     async def start(self) -> None:
         if self._started:
@@ -183,12 +188,13 @@ class WorkflowSupervisor:
         existing = self.registry.operation_result(operation_id, "workflow.control", digest)
         if existing is not None:
             return {**existing, "deduplicated": True}
-        snapshot = self.registry.get_snapshot(params["workflow_id"])
-        if snapshot["attempt"]["attempt_id"] != params["expected_attempt_id"]:
-            raise ValueError("STALE_ATTEMPT")
-        next_snapshot = _apply_control(snapshot, params["action"], self.clock())
-        event = self._event(next_snapshot, params["action"], operation_id=operation_id)
-        self.registry.save_snapshot(next_snapshot, event)
+        async with self._mutation_lock(params["workflow_id"]):
+            snapshot = self.registry.get_snapshot(params["workflow_id"])
+            if snapshot["attempt"]["attempt_id"] != params["expected_attempt_id"]:
+                raise ValueError("STALE_ATTEMPT")
+            next_snapshot = _apply_control(snapshot, params["action"], self.clock())
+            event = self._event(next_snapshot, params["action"], operation_id=operation_id)
+            self.registry.save_snapshot(next_snapshot, event)
         result = {"accepted": True, "snapshot": next_snapshot}
         self.registry.save_operation_result(operation_id=operation_id, method="workflow.control", payload_digest=digest, result=result, now=self.clock())
         control_event = self._control_events.setdefault(params["workflow_id"], asyncio.Event())
@@ -389,7 +395,34 @@ class WorkflowSupervisor:
             self.registry.save_snapshot(transcribing, event)
             await self._publish(event)
             running = transcribing
-            transcript_result = await self.transcriber.transcribe(execution_spec, running["attempt"]["attempt_id"])
+            attempt_id = running["attempt"]["attempt_id"]
+            loop = asyncio.get_running_loop()
+            latest_progress: dict[str, Any] = {"phase": "starting_transcription", "detail": "正在启动转录"}
+            progress_tasks: set[asyncio.Task[None]] = set()
+
+            def report_progress(update: dict[str, Any]) -> None:
+                latest_progress.update(update)
+                def schedule() -> None:
+                    task = asyncio.create_task(self._record_transcription_progress(running["workflow_id"], attempt_id, dict(latest_progress), heartbeat=False))
+                    progress_tasks.add(task)
+                    task.add_done_callback(progress_tasks.discard)
+                loop.call_soon_threadsafe(schedule)
+
+            heartbeat_task = asyncio.create_task(
+                self._transcription_heartbeat(running["workflow_id"], attempt_id, latest_progress),
+                name=f"transcription-heartbeat-{running['workflow_id']}",
+            )
+            try:
+                parameters = inspect.signature(self.transcriber.transcribe).parameters
+                if "progress" in parameters:
+                    transcript_result = await self.transcriber.transcribe(execution_spec, attempt_id, progress=report_progress)
+                else:
+                    transcript_result = await self.transcriber.transcribe(execution_spec, attempt_id)
+            finally:
+                heartbeat_task.cancel()
+                await asyncio.gather(heartbeat_task, return_exceptions=True)
+                if progress_tasks:
+                    await asyncio.gather(*progress_tasks, return_exceptions=True)
             # Blocking model calls cannot always be interrupted safely. Honor
             # pending control before publishing their result so cancellation
             # never creates a late transcript artifact.
@@ -527,6 +560,34 @@ class WorkflowSupervisor:
             result = self.event_sink(event)
             if asyncio.iscoroutine(result):
                 await result
+
+    def _mutation_lock(self, workflow_id: str) -> asyncio.Lock:
+        return self._mutation_locks.setdefault(workflow_id, asyncio.Lock())
+
+    async def _transcription_heartbeat(self, workflow_id: str, attempt_id: str, latest: dict[str, Any]) -> None:
+        while True:
+            await asyncio.sleep(self.heartbeat_interval_seconds)
+            await self._record_transcription_progress(workflow_id, attempt_id, dict(latest), heartbeat=True)
+
+    async def _record_transcription_progress(self, workflow_id: str, attempt_id: str, update: dict[str, Any], *, heartbeat: bool) -> None:
+        async with self._mutation_lock(workflow_id):
+            current = self.registry.get_snapshot(workflow_id)
+            if current["attempt"]["attempt_id"] != attempt_id or current["status"] != "running" or current["stage"] != "transcribing":
+                return
+            now = self.clock()
+            next_snapshot = json.loads(json.dumps(current))
+            previous_phase = next_snapshot["progress"].get("phase")
+            phase = str(update.get("phase") or previous_phase or "transcribing")
+            next_snapshot["progress"]["phase"] = phase
+            next_snapshot["progress"]["detail"] = str(update.get("detail") or next_snapshot["progress"].get("detail") or phase)
+            if previous_phase != phase:
+                next_snapshot["progress"]["phase_started_at"] = now
+            next_snapshot["progress"]["heartbeat_at"] = now
+            next_snapshot["sequence"] += 1
+            next_snapshot["timestamps"]["updated_at"] = now
+            event = self._event(next_snapshot, "heartbeat" if heartbeat else "phase_progress", data={"phase": phase, "heartbeat": heartbeat})
+            self.registry.save_snapshot(next_snapshot, event)
+        await self._publish(event)
 
 
 def build_spec(draft: dict[str, Any], *, workflow_id: str) -> dict[str, Any]:

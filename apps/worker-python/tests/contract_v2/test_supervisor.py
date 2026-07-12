@@ -30,6 +30,16 @@ class BlockingTranscriber:
         return {"kind": "transcript_markdown", "path": "", "text": "controlled transcript"}
 
 
+class ProgressBlockingTranscriber(BlockingTranscriber):
+    async def transcribe(self, spec: dict, attempt_id: str, *, progress=None) -> dict:
+        del spec, attempt_id
+        if progress:
+            progress({"phase": "model_loading", "detail": "正在加载 MOSS 模型"})
+        self.started.set()
+        await self.release.wait()
+        return {"kind": "transcript_markdown", "path": "", "text": "controlled transcript"}
+
+
 class CountingSummaryGenerator:
     def __init__(self) -> None:
         self.calls = 0
@@ -73,6 +83,38 @@ def make_draft(source: Path, name: str = "sample") -> dict:
 
 
 class SupervisorTests(unittest.TestCase):
+    def test_transcription_heartbeat_persists_truthful_progress(self) -> None:
+        async def scenario() -> None:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                source = root / "source.wav"
+                source.write_bytes(b"audio")
+                registry = WorkflowRegistry(root / "registry.sqlite3")
+                transcriber = ProgressBlockingTranscriber()
+                supervisor = WorkflowSupervisor(
+                    registry,
+                    transcriber=transcriber,
+                    summary_generator=FakeSummaryGenerator(),
+                    heartbeat_interval_seconds=0.01,
+                )
+                submitted = await supervisor.submit(make_draft(source), operation_id="op_heartbeat")
+                workflow_id = submitted["snapshot"]["workflow_id"]
+                await transcriber.started.wait()
+                await asyncio.sleep(0.035)
+                snapshot = registry.get_snapshot(workflow_id)
+                self.assertEqual(snapshot["stage"], "transcribing")
+                self.assertEqual(snapshot["progress"]["overall_ratio"], 0.08)
+                self.assertEqual(snapshot["progress"]["phase"], "model_loading")
+                self.assertIn("heartbeat_at", snapshot["progress"])
+                self.assertGreater(snapshot["sequence"], 4)
+                transcriber.release.set()
+                await supervisor._queue.join()
+                self.assertEqual(registry.get_snapshot(workflow_id)["status"], "completed")
+                await supervisor.shutdown(interrupt=False)
+                registry.close()
+
+        asyncio.run(scenario())
+
     def test_three_inflight_and_fourth_backlog(self) -> None:
         async def scenario() -> None:
             with tempfile.TemporaryDirectory() as temp:

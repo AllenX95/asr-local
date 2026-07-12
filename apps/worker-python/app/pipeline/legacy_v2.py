@@ -16,7 +16,9 @@ class LegacyQwenPyannoteTranscriber:
     migration.
     """
 
-    async def transcribe(self, spec: dict[str, Any], attempt_id: str) -> dict[str, Any]:
+    async def transcribe(self, spec: dict[str, Any], attempt_id: str, *, progress=None) -> dict[str, Any]:
+        if progress:
+            progress({"phase": "legacy_transcription", "detail": "正在执行兼容转录流程"})
         return await asyncio.to_thread(self._transcribe_sync, spec, attempt_id)
 
     def _transcribe_sync(self, spec: dict[str, Any], attempt_id: str) -> dict[str, Any]:

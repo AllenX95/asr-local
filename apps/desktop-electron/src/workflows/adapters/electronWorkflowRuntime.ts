@@ -1,5 +1,5 @@
 import { electronBridge } from '../../ipc/desktopBridge'
-import type { WorkflowEventHandler, WorkflowRuntime } from '../runtime'
+import type { RuntimeStatusHandler, WorkflowEventHandler, WorkflowRuntime } from '../runtime'
 import type { ArtifactRevisionCommand, PromptPreviewInput, PromptPreviewResult, WorkflowCapabilities, WorkflowControlCommand, WorkflowDraft, WorkflowRetryCommand, WorkflowSnapshot } from '../types'
 
 const operationId = (prefix: string) => `${prefix}_${crypto.randomUUID()}`
@@ -16,4 +16,5 @@ export class ElectronWorkflowRuntime implements WorkflowRuntime {
   async retry(command: WorkflowRetryCommand): Promise<WorkflowSnapshot> { const result = await this.bridge.invoke<{ snapshot: WorkflowSnapshot }>('workflow_v2_retry', { operationId: operationId('op_retry'), workflowId: command.workflow_id, expectedAttemptId: command.expected_attempt_id, expectedSequence: command.expected_sequence, fromStage: command.from_stage, inputArtifactId: command.input_artifact_id ?? null }); return result.snapshot }
   async registerRevision(command: ArtifactRevisionCommand): Promise<WorkflowSnapshot> { const result = await this.bridge.invoke<{ snapshot: WorkflowSnapshot }>('workflow_v2_register_revision', { operationId: operationId('op_revision'), params: command }); return result.snapshot }
   subscribe(handler: WorkflowEventHandler): () => void { return this.bridge.onWorkflowEvent(handler) }
+  subscribeRuntimeStatus(handler: RuntimeStatusHandler): () => void { return this.bridge.onRuntimeStatus(handler) }
 }

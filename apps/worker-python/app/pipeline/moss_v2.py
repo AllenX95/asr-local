@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 import tempfile
 import threading
 from typing import Any
 
 from app.audio import NormalizedAudio, normalize_audio
+
+
+LOGGER = logging.getLogger("asr_local.worker.moss")
 
 
 def _read_audio_with_fallback(source_path: Path) -> tuple[Any, int]:
@@ -39,11 +43,15 @@ class MossTranscriber:
         self._model_key: tuple[str, str, str] | None = None
         self._lock = threading.Lock()
 
-    async def transcribe(self, spec: dict[str, Any], attempt_id: str) -> dict[str, Any]:
-        return await asyncio.to_thread(self._transcribe_sync, spec, attempt_id)
+    async def transcribe(self, spec: dict[str, Any], attempt_id: str, *, progress=None) -> dict[str, Any]:
+        return await asyncio.to_thread(self._transcribe_sync, spec, attempt_id, progress=progress)
 
-    def _transcribe_sync(self, spec: dict[str, Any], attempt_id: str) -> dict[str, Any]:
-        del attempt_id
+    def _transcribe_sync(self, spec: dict[str, Any], attempt_id: str, *, progress=None) -> dict[str, Any]:
+        workflow_id = str(spec.get("workflow_id", "unknown"))
+        def emit_progress(item: dict[str, Any]) -> None:
+            LOGGER.info("moss phase | workflow_id=%s | attempt_id=%s | phase=%s | detail=%s", workflow_id, attempt_id, item.get("phase"), item.get("detail"))
+            if progress:
+                progress(item)
         transcription = spec["transcription"]
         component = next(item for item in transcription["model_snapshot"]["components"] if item.get("role") == "transcriber")
         model_path = Path(component["resolved_path"])
@@ -57,6 +65,7 @@ class MossTranscriber:
         except ModuleNotFoundError as exc:
             raise RuntimeError(f"MOSS production adapter dependency missing: {exc.name}") from exc
 
+        emit_progress({"phase": "audio_normalizing", "detail": "正在解码并标准化音频"})
         channel_strategy = _audio_channel_strategy(transcription)
         normalized = _normalize_for_moss(source_path, channel_strategy)
         plan = spec.get("runtime_plan") or {}
@@ -76,8 +85,11 @@ class MossTranscriber:
                     torch_module=torch,
                     device=device,
                     dtype=dtype,
+                    progress=emit_progress,
                 )
                 self._model_key = model_key
+            emit_progress({"phase": "model_loading", "detail": "正在准备 MOSS 模型"})
+            emit_progress({"phase": "generating", "detail": "正在执行语音识别与说话人分析"})
             output = self._model_adapter.transcribe(
                 audio=[(stream.audio, stream.sample_rate) for stream in normalized.streams],
                 context=[transcription["prompt_snapshot"]["compiled_text"]] * len(normalized.streams),
@@ -91,6 +103,7 @@ class MossTranscriber:
                 "MOSS returned a different number of results than normalized audio streams "
                 f"({len(output)} results for {len(normalized.streams)} streams)"
             )
+        emit_progress({"phase": "formatting_transcript", "detail": "正在整理转录结果"})
         markdown = format_moss_transcript_streams(
             output,
             [stream.label for stream in normalized.streams],

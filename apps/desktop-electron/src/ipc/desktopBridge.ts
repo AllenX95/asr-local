@@ -1,8 +1,9 @@
-import type { WorkflowEvent } from '../workflows/types'
+import type { RuntimeStatusEvent, WorkflowEvent } from '../workflows/types'
 
 export interface ElectronDesktopBridge {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>
   onWorkflowEvent(handler: (event: WorkflowEvent) => void): () => void
+  onRuntimeStatus(handler: (event: RuntimeStatusEvent) => void): () => void
 }
 
 declare global {

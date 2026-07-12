@@ -82,6 +82,9 @@ export interface WorkflowProgress {
   processed_ms?: number | null
   total_ms?: number | null
   detail?: string | null
+  phase?: string | null
+  phase_started_at?: string | null
+  heartbeat_at?: string | null
 }
 
 export interface WorkflowTimelineEntry {
@@ -112,6 +115,13 @@ export interface WorkflowEvent {
   stage: WorkflowStage
   data: Record<string, unknown>
   state: WorkflowSnapshot
+}
+
+export interface RuntimeStatusEvent {
+  state: 'starting' | 'ready' | 'stopping' | 'stopped' | 'unavailable' | 'error'
+  occurred_at: string
+  detail?: string
+  pid?: number
 }
 
 export interface WorkflowDraft extends Record<string, unknown> {

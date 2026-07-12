@@ -33,7 +33,9 @@ class CloudAsrTranscriber:
         self.secret_provider = secret_provider
         self.request_fn = request_fn or _request_multipart
 
-    async def transcribe(self, spec: dict[str, Any], attempt_id: str) -> dict[str, Any]:
+    async def transcribe(self, spec: dict[str, Any], attempt_id: str, *, progress=None) -> dict[str, Any]:
+        if progress:
+            progress({"phase": "cloud_asr_request", "detail": "正在调用云端语音识别"})
         profile = spec["transcription"].get("cloud_profile")
         if not profile:
             raise RuntimeError("CLOUD_PROFILE_REQUIRED")

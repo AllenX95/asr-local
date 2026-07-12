@@ -13,7 +13,7 @@ export class WorkflowRuntimeClient extends EventEmitter {
   private nextRequestId = 0
   private starting: Promise<void> | null = null
 
-  constructor(private readonly projectRoot: string) { super() }
+  constructor(private readonly projectRoot: string, private readonly options: { stderrSink?: (text: string) => void } = {}) { super() }
 
   async request(method: string, params: Record<string, unknown>, operationId?: string): Promise<unknown> {
     await this.ensureStarted()
@@ -23,6 +23,7 @@ export class WorkflowRuntimeClient extends EventEmitter {
   async shutdown(): Promise<void> {
     const child = this.child
     if (!child) return
+    this.emit('runtime-status', { state: 'stopping', occurred_at: new Date().toISOString(), detail: '正在停止 Python Runtime' })
     try {
       await this.send('runtime.shutdown', { mode: 'interrupt', grace_ms: 10_000 }, undefined, 12_000)
     } catch {
@@ -34,6 +35,7 @@ export class WorkflowRuntimeClient extends EventEmitter {
       child.once('exit', () => { clearTimeout(timer); resolve() })
     })
     this.child = null
+    this.emit('runtime-status', { state: 'stopped', occurred_at: new Date().toISOString(), detail: 'Python Runtime 已停止' })
   }
 
   private async ensureStarted(): Promise<void> {
@@ -43,6 +45,7 @@ export class WorkflowRuntimeClient extends EventEmitter {
   }
 
   private async start(): Promise<void> {
+    this.emit('runtime-status', { state: 'starting', occurred_at: new Date().toISOString(), detail: '正在启动 Python Runtime' })
     const workerDir = path.join(this.projectRoot, 'apps', 'worker-python')
     const configured = process.env.ASR_LOCAL_PYTHON?.trim()
     const packagedPython = path.join(this.projectRoot, 'runtime', 'python', 'python.exe')
@@ -62,8 +65,13 @@ export class WorkflowRuntimeClient extends EventEmitter {
       },
     })
     this.child = child
+    this.emit('runtime-status', { state: 'starting', occurred_at: new Date().toISOString(), detail: 'Python Runtime 已启动，正在握手', pid: child.pid })
     child.stderr.setEncoding('utf8')
-    child.stderr.on('data', (chunk: string) => process.stderr.write(`[workflow-v2] ${chunk}`))
+    child.stderr.on('data', (chunk: string) => {
+      const text = `[workflow-v2] ${chunk}`
+      this.options.stderrSink?.(text)
+      process.stderr.write(text)
+    })
     createInterface({ input: child.stdout, crlfDelay: Infinity }).on('line', (line) => this.handleLine(line))
     child.once('exit', (code, signal) => {
       if (this.child === child) this.child = null
@@ -71,14 +79,22 @@ export class WorkflowRuntimeClient extends EventEmitter {
       for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(error) }
       this.pending.clear()
       this.emit('unavailable', { code, signal })
+      this.emit('runtime-status', { state: 'unavailable', occurred_at: new Date().toISOString(), detail: `Python Runtime 意外退出 (code=${code}, signal=${signal})` })
     })
-    child.once('error', (error) => this.emit('error', error))
+    child.once('error', (error) => {
+      if (this.child === child) this.child = null
+      for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(error) }
+      this.pending.clear()
+      this.emit('error', error)
+      this.emit('runtime-status', { state: 'error', occurred_at: new Date().toISOString(), detail: `Python Runtime 启动失败: ${error.message}` })
+    })
     const hello = await this.send('runtime.hello', { supported_versions: [2] }) as { selected_version?: number; capabilities?: { pipeline_mode?: { resolved?: string } } }
     if (hello.selected_version !== 2) { child.kill(); throw new Error('Workflow runtime did not negotiate protocol version 2') }
     if (pipelineMode === 'production' && hello.capabilities?.pipeline_mode?.resolved !== 'production') {
       child.kill()
       throw new Error('Production workflow runtime did not resolve production pipeline mode')
     }
+    this.emit('runtime-status', { state: 'ready', occurred_at: new Date().toISOString(), detail: 'Python Runtime v2 已就绪', pid: child.pid })
   }
 
   private send(method: string, params: Record<string, unknown>, operationId?: string, timeoutMs = 30_000): Promise<unknown> {
