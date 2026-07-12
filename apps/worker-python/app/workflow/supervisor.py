@@ -596,11 +596,11 @@ def build_spec(draft: dict[str, Any], *, workflow_id: str) -> dict[str, Any]:
     source_sha256 = _sha256_file(source_path) if stat and source_path.is_file() else None
     transcription = json.loads(json.dumps(draft["transcription"]))
     prompt_input = transcription["prompt_input"]
-    compiled_text = _compile_prompt(prompt_input)
+    compiled_text = _compile_prompt(prompt_input, transcription["pipeline_profile"])
     transcription["prompt_snapshot"] = {
-        "compiler_id": "moss-prompt" if transcription["pipeline_profile"] == "moss_transcribe_diarize" else "legacy-prompt",
+        "compiler_id": "moss-prompt" if transcription["pipeline_profile"] in {"moss_transcribe_diarize", "pyannote_moss_asr"} else "legacy-prompt",
         "compiler_version": 1,
-        "base_template_version": "openmoss-official-2026-07-09" if transcription["pipeline_profile"] == "moss_transcribe_diarize" else "legacy-v1",
+        "base_template_version": "openmoss-official-2026-07-09" if transcription["pipeline_profile"] in {"moss_transcribe_diarize", "pyannote_moss_asr"} else "legacy-v1",
         "compiled_text": compiled_text,
         "sha256": hashlib.sha256(compiled_text.encode("utf-8")).hexdigest(),
     }
@@ -862,11 +862,12 @@ def _apply_control(snapshot: dict[str, Any], action: str, clock: str) -> dict[st
     return result
 
 
-def _compile_prompt(prompt_input: dict[str, Any]) -> str:
-    parts = [
-        "请将音频转写为文本，每一段需以起始时间戳和说话人编号（[S01]、[S02]、[S03]…）开头，"
-        "正文为对应的语音内容，并在段末标注结束时间戳，以清晰标明该段语音范围。"
-    ]
+def _compile_prompt(prompt_input: dict[str, Any], pipeline_profile: str) -> str:
+    if pipeline_profile in {"moss_transcribe_diarize", "pyannote_moss_asr"}:
+        base = "请将音频转写为文本，保留清晰的时间范围和自然段落。"
+    else:
+        base = "请准确转写音频内容，保留原意、专有名词和自然段落，不要添加音频中不存在的信息。"
+    parts = [base]
     if prompt_input.get("recording_background"):
         parts.append(f"录音背景：\n{prompt_input['recording_background']}")
     if prompt_input.get("hotwords"):

@@ -14,6 +14,9 @@ from app.exporters import export_transcript_bundle
 from app.logging_utils import get_logger
 from app.models.manager import ModelManager
 from app.pipeline.cloud_asr import CloudAsrClient
+from app.pipeline.segment_planner import plan_segments
+from app.pipeline.segment_types import DiarizationTurn
+from app.pipeline.pyannote_provider import PyannoteDiarizationProvider
 from app.schemas import SpeakerSegment, TaskSpec, TranscriptSegment
 
 
@@ -125,6 +128,7 @@ def run_job(payload: dict, emit=None, model_manager: ModelManager | None = None)
 
     integrated_diarization = (
         task.asr_backend == "local"
+        and not task.force_external_diarization
         and manager.local_asr_uses_integrated_diarization()
     )
     normalized_segments = normalize_speaker_segments(
@@ -146,6 +150,17 @@ def run_job(payload: dict, emit=None, model_manager: ModelManager | None = None)
         payload={"normalized_segment_count": len(normalized_segments)},
     )
     check_job_control(task, job_dir, emit=emit, progress=0.36, total_ms=total_ms)
+
+    if task.force_external_diarization and task.asr_backend == "local":
+        _emit(
+            emit,
+            task,
+            stage="releasing_model",
+            progress=0.40,
+            total_ms=total_ms,
+            payload={"detail": "正在释放 Pyannote 显存，准备加载 ASR 模型"},
+        )
+        manager.close_pyannote_pipeline()
 
     transcript_segments = transcribe_segments(
         task=task,
@@ -468,6 +483,7 @@ def build_speaker_segments(
 
     if (
         task.asr_backend == "local"
+        and not task.force_external_diarization
         and manager.local_asr_uses_integrated_diarization()
     ):
         LOGGER.info(
@@ -485,43 +501,28 @@ def build_speaker_segments(
             )
         ]
 
-    pipeline = manager.get_pyannote_pipeline()
     LOGGER.info(
         "running pyannote diarization | job_id=%s | sample_rate=%s | wav=%s",
         task.job_id,
         sample_rate,
         normalized_wav_path,
     )
-    waveform = manager.torch.from_numpy(audio).unsqueeze(0)
-    diarization = pipeline(
-        {
-            "waveform": waveform,
-            "sample_rate": sample_rate,
-            "uri": normalized_wav_path.name,
-        }
+    turns = PyannoteDiarizationProvider(model_manager=manager).diarize(
+        audio=audio,
+        sample_rate=sample_rate,
+        uri=normalized_wav_path.name,
+        total_ms=total_ms,
     )
-    annotation = getattr(diarization, "exclusive_speaker_diarization", None)
-    if annotation is None:
-        annotation = getattr(diarization, "speaker_diarization", diarization)
-    segments: list[SpeakerSegment] = []
-
-    for index, (turn, _, speaker) in enumerate(
-        annotation.itertracks(yield_label=True),
-        start=1,
-    ):
-        start_ms = max(0, int(round(turn.start * 1000)))
-        end_ms = min(total_ms, int(round(turn.end * 1000)))
-        if end_ms <= start_ms:
-            continue
-        segments.append(
-            SpeakerSegment(
-                segment_id=f"segment-{index:04d}",
-                speaker=str(speaker),
-                start_ms=start_ms,
-                end_ms=end_ms,
-                duration_ms=end_ms - start_ms,
-            )
+    segments = [
+        SpeakerSegment(
+            segment_id=f"segment-{index:04d}",
+            speaker=turn.speaker,
+            start_ms=turn.start_ms,
+            end_ms=turn.end_ms,
+            duration_ms=turn.duration_ms,
         )
+        for index, turn in enumerate(turns, start=1)
+    ]
 
     if not segments:
         LOGGER.warning("pyannote produced no segments; falling back to single speaker | job_id=%s", task.job_id)
@@ -544,68 +545,24 @@ def normalize_speaker_segments(
     *,
     split_long: bool = True,
 ) -> list[SpeakerSegment]:
-    ordered = sorted(segments, key=lambda item: (item.start_ms, item.end_ms))
-    merged: list[SpeakerSegment] = []
-
-    for segment in ordered:
-        bounded_start = max(0, min(segment.start_ms, total_ms))
-        bounded_end = max(bounded_start, min(segment.end_ms, total_ms))
-        if bounded_end <= bounded_start:
-            continue
-
-        current = SpeakerSegment(
-            segment_id=segment.segment_id,
-            speaker=segment.speaker,
-            start_ms=bounded_start,
-            end_ms=bounded_end,
-            duration_ms=bounded_end - bounded_start,
+    planned = plan_segments(
+        [DiarizationTurn(item.speaker, item.start_ms, item.end_ms) for item in segments],
+        total_ms,
+        min_segment_ms=MIN_SEGMENT_MS,
+        merge_gap_ms=MERGE_GAP_MS,
+        max_segment_ms=MAX_SEGMENT_MS if split_long else max(total_ms, 1),
+        padding_ms=0,
+    )
+    return [
+        SpeakerSegment(
+            segment_id=item.segment_id,
+            speaker=item.speaker,
+            start_ms=item.start_ms,
+            end_ms=item.end_ms,
+            duration_ms=item.duration_ms,
         )
-
-        if not merged:
-            merged.append(current)
-            continue
-
-        previous = merged[-1]
-        same_speaker = previous.speaker == current.speaker
-        small_gap = current.start_ms - previous.end_ms <= MERGE_GAP_MS
-
-        if same_speaker and small_gap:
-            previous.end_ms = max(previous.end_ms, current.end_ms)
-            previous.duration_ms = previous.end_ms - previous.start_ms
-            continue
-
-        if current.duration_ms < MIN_SEGMENT_MS and same_speaker:
-            previous.end_ms = max(previous.end_ms, current.end_ms)
-            previous.duration_ms = previous.end_ms - previous.start_ms
-            continue
-
-        merged.append(current)
-
-    final_segments: list[SpeakerSegment] = []
-    counter = 1
-    for segment in merged:
-        if not split_long or segment.duration_ms <= MAX_SEGMENT_MS:
-            segment.segment_id = f"segment-{counter:04d}"
-            final_segments.append(segment)
-            counter += 1
-            continue
-
-        cursor = segment.start_ms
-        while cursor < segment.end_ms:
-            chunk_end = min(cursor + MAX_SEGMENT_MS, segment.end_ms)
-            final_segments.append(
-                SpeakerSegment(
-                    segment_id=f"segment-{counter:04d}",
-                    speaker=segment.speaker,
-                    start_ms=cursor,
-                    end_ms=chunk_end,
-                    duration_ms=chunk_end - cursor,
-                )
-            )
-            counter += 1
-            cursor = chunk_end
-
-    return final_segments
+        for item in planned
+    ]
 
 
 def transcribe_segments(
@@ -644,6 +601,7 @@ def transcribe_segments(
         len(task.terms),
     )
     output: list[TranscriptSegment] = []
+    chunk_origins: dict[int, int] = {}
 
     for batch_start in range(0, len(speaker_segments), batch_size):
         batch_segments = speaker_segments[
@@ -665,12 +623,15 @@ def transcribe_segments(
         batch_inputs = []
         for offset, segment in enumerate(batch_segments):
             segment_index = batch_start + offset + 1
+            input_start_ms = max(0, segment.start_ms - 200) if task.force_external_diarization else segment.start_ms
+            input_end_ms = min(total_ms, segment.end_ms + 200) if task.force_external_diarization else segment.end_ms
             audio_chunk = slice_audio(
                 audio,
                 sample_rate,
-                start_ms=segment.start_ms,
-                end_ms=segment.end_ms,
+                start_ms=input_start_ms,
+                end_ms=input_end_ms,
             )
+            chunk_origins[segment_index] = input_start_ms
             batch_inputs.append((segment_index, segment, audio_chunk))
 
         if task.asr_backend == "cloud":
@@ -709,6 +670,8 @@ def transcribe_segments(
                     segment,
                     transcription,
                     task.replacements,
+                    speaker=segment.speaker,
+                    model_origin_ms=chunk_origins.get(segment_index, segment.start_ms),
                 )
                 if task.enable_speaker_diarization
                 else []
@@ -770,6 +733,9 @@ def transcript_segments_from_model_output(
     source_segment: SpeakerSegment,
     transcription: object,
     replacements,
+    *,
+    speaker: str | None = None,
+    model_origin_ms: int | None = None,
 ) -> list[TranscriptSegment]:
     model_segments = getattr(transcription, "segments", None)
     if not model_segments:
@@ -780,15 +746,17 @@ def transcript_segments_from_model_output(
     for index, model_segment in enumerate(model_segments, start=1):
         text = getattr(model_segment, "text", "") or ""
         normalized_text = normalize_text(text, replacements)
-        start_ms = source_segment.start_ms + int(getattr(model_segment, "start_ms", 0))
-        end_ms = source_segment.start_ms + int(getattr(model_segment, "end_ms", 0))
+        origin_ms = source_segment.start_ms if model_origin_ms is None else model_origin_ms
+        start_ms = origin_ms + int(getattr(model_segment, "start_ms", 0))
+        end_ms = origin_ms + int(getattr(model_segment, "end_ms", 0))
+        start_ms = max(source_segment.start_ms, start_ms)
         end_ms = min(max(end_ms, start_ms), source_segment.end_ms)
         if end_ms <= start_ms or not normalized_text:
             continue
         output.append(
             TranscriptSegment(
                 segment_id=f"{source_segment.segment_id}-{index:03d}",
-                speaker=canonical_speaker_name(getattr(model_segment, "speaker", "")),
+                speaker=canonical_speaker_name(speaker or getattr(model_segment, "speaker", "")),
                 start_ms=start_ms,
                 end_ms=end_ms,
                 text=text,

@@ -6,7 +6,7 @@ const draft = (name: string): WorkflowDraft => ({
   draft_version: 2,
   display_name: name,
   source: { path: `${name}.wav` },
-  transcription: { pipeline_profile: 'moss_transcribe_diarize' },
+  transcription: { pipeline_profile: 'pyannote_qwen3_asr' },
   summary: { profile_id: 'summary-profile-uuid' },
   output: { directory: 'outputs', base_name: name, collision_policy: 'unique_suffix' },
 })
@@ -33,7 +33,7 @@ describe('FakeWorkflowRuntime', () => {
     runtime.subscribe((event) => events.push(`${event.workflow_id}:${event.sequence}`))
     const created = await runtime.submit(draft('preview'))
     const preview = await runtime.previewPrompt({
-      pipeline_profile: 'moss_transcribe_diarize',
+      pipeline_profile: 'pyannote_qwen3_asr',
       language: { mode: 'auto', value: null },
       prompt_input: { recording_background: 'meeting', hotwords: ['MOSS'] },
     })

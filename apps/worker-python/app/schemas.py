@@ -54,6 +54,8 @@ class TaskSpec:
     replacements: list[ReplacementRule] = field(default_factory=list)
     keep_fillers: bool = True
     auto_punctuation: bool = True
+    local_asr_model: str | None = None
+    force_external_diarization: bool = False
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "TaskSpec":
@@ -110,6 +112,12 @@ class TaskSpec:
             ],
             keep_fillers=bool(payload.get("keep_fillers", True)),
             auto_punctuation=bool(payload.get("auto_punctuation", True)),
+            local_asr_model=(
+                str(payload.get("local_asr_model")).strip()
+                if payload.get("local_asr_model")
+                else None
+            ),
+            force_external_diarization=bool(payload.get("force_external_diarization", False)),
         )
 
     @property
@@ -137,7 +145,7 @@ class TaskSpec:
             "moss_transcribe_diarize": "OpenMOSS-Team/MOSS-Transcribe-Diarize",
         }
         try:
-            active_model = load_models_config().active_local_asr_model
+            active_model = self.local_asr_model or load_models_config().active_local_asr_model
         except Exception:
             active_model = DEFAULT_LOCAL_ASR_MODEL
         return model_names.get(active_model, active_model)

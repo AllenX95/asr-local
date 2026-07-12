@@ -16,8 +16,11 @@ class PipelineModeTests(unittest.TestCase):
 
     def test_auto_selects_production_only_when_native_gate_is_ready(self) -> None:
         ready_snapshot = {
-            "models": {"moss_transcribe_diarize": {"exists": True}},
-            "optional_modules": {"torch": True, "transformers": True},
+            "models": {
+                "qwen3_asr_1_7b": {"exists": True},
+                "pyannote_speaker_diarization": {"exists": True},
+            },
+            "optional_modules": {"torch": True, "qwen_asr": True, "pyannote.audio": True},
         }
         with patch("app.runtime.env.environment_snapshot", return_value=ready_snapshot), patch(
             "app.supervisor.server.importlib.util.find_spec", return_value=object()
@@ -26,8 +29,11 @@ class PipelineModeTests(unittest.TestCase):
 
     def test_auto_falls_back_to_fake_when_native_gate_is_incomplete(self) -> None:
         snapshot = {
-            "models": {"moss_transcribe_diarize": {"exists": True}},
-            "optional_modules": {"torch": True, "transformers": False},
+            "models": {
+                "qwen3_asr_1_7b": {"exists": True},
+                "pyannote_speaker_diarization": {"exists": True},
+            },
+            "optional_modules": {"torch": True, "qwen_asr": False, "pyannote.audio": True},
         }
         with patch("app.runtime.env.environment_snapshot", return_value=snapshot):
             self.assertEqual(resolve_pipeline_mode("auto"), "fake")

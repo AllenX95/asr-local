@@ -9,6 +9,7 @@ import warnings
 
 from app.config import DEFAULT_LOCAL_ASR_MODEL, load_models_config, project_root
 from app.logging_utils import get_logger
+from app.runtime.gpu_lifecycle import release_gpu_resources
 
 
 LOGGER = get_logger()
@@ -221,6 +222,13 @@ class MossTranscribeDiarizeAdapter:
         duration_seconds = len(item.audio) / max(item.sample_rate, 1)
         return max(2048, min(65536, int(duration_seconds * 24) + 512))
 
+    def close(self) -> None:
+        """Release model and processor references for an explicit phase swap."""
+        self._model = None
+        self._processor = None
+        self._loaded_device = None
+        self._loaded_dtype = None
+
 
 def _strip_moss_markup(text: str) -> str:
     stripped = re.sub(r"\[\d+(?:\.\d+)?\]\[S\d+\]", " ", text or "")
@@ -417,6 +425,26 @@ class ModelManager:
                         exc,
                     )
         return self._pyannote_pipeline
+
+    def close_qwen_model(self) -> None:
+        model = self._qwen_model
+        self._qwen_model = None
+        release_gpu_resources(model, torch_module=self._torch, label="qwen")
+
+    def close_moss_model(self) -> None:
+        model = self._moss_model
+        self._moss_model = None
+        release_gpu_resources(model, torch_module=self._torch, label="moss")
+
+    def close_pyannote_pipeline(self) -> None:
+        pipeline = self._pyannote_pipeline
+        self._pyannote_pipeline = None
+        release_gpu_resources(pipeline, torch_module=self._torch, label="pyannote")
+
+    def close_local_models(self) -> None:
+        self.close_qwen_model()
+        self.close_moss_model()
+        self.close_pyannote_pipeline()
 
     def runtime_summary(self, include_device: bool = True) -> dict:
         summary = {

@@ -34,7 +34,7 @@ export class FakeWorkflowRuntime implements WorkflowRuntime {
   async capabilities(): Promise<WorkflowCapabilities> {
     return {
       max_inflight_workflows: 3,
-      pipeline_profiles: ['moss_transcribe_diarize', 'qwen3_asr_with_pyannote'],
+      pipeline_profiles: ['pyannote_qwen3_asr', 'pyannote_moss_asr'],
       methods: ['workflow.submit', 'workflow.list', 'workflow.get', 'workflow.clear', 'workflow.control', 'workflow.retry', 'artifact.register_revision'],
     }
   }

@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import { ChevronDown, ChevronRight, Clock3, FolderOpen, Pause, Play, RefreshCw, RotateCcw, Square, Trash2 } from '@lucide/vue';
 import { api } from '../../ipc/desktopClient';
-import type { WorkflowCatalogs, WorkflowSummaryProfile, WorkflowSummaryTemplate } from '../../ipc/workerTypes';
+import type { PipelineProfile, WorkflowCatalogs, WorkflowSummaryProfile, WorkflowSummaryTemplate } from '../../ipc/workerTypes';
 import { useAppStore } from '../../stores/appStore';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import type { WorkflowDraft, WorkflowSnapshot } from '../../workflows/types';
@@ -17,8 +17,7 @@ const recordingBackground = ref('');
 const hotwordsText = ref('');
 const extraInstruction = ref('');
 const devicePolicy = ref<'auto' | 'cpu' | 'cuda'>('auto');
-const channelStrategy = ref<'mixdown' | 'split_stereo'>('mixdown');
-const pipelineProfile = ref<'moss_transcribe_diarize' | 'qwen3_asr_with_pyannote'>('moss_transcribe_diarize');
+const pipelineProfile = ref<Exclude<PipelineProfile, 'cloud_asr'>>('pyannote_qwen3_asr');
 const selectedProfileName = ref('');
 const selectedTemplateName = ref('');
 const privacyConfirmed = ref(false);
@@ -33,6 +32,9 @@ const refreshing = ref(false);
 const clearingWorkflowId = ref<string | null>(null);
 const recentExpanded = ref(true);
 const diagnosticsExpanded = ref(false);
+const pyannoteReady = computed(() => appStore.settings.models?.pyannote_exists ?? false);
+const qwenReady = computed(() => appStore.settings.models?.qwen_exists ?? false);
+const mossReady = computed(() => appStore.settings.models?.moss_exists ?? false);
 
 const availableProfiles = computed<WorkflowSummaryProfile[]>(() => {
   if (catalogs.value.summary_profiles.length) return catalogs.value.summary_profiles;
@@ -66,7 +68,7 @@ const providerAuthorizationText = computed(() => {
   if (selectedProfile.value) notices.push(`总结文本将发送到 ${selectedProfile.value.base_url}，使用模型 ${selectedProfile.value.model}`);
   return notices.length ? `${notices.join('；')}。` : '';
 });
-const pipelineLabel = computed(() => pipelineProfile.value === 'moss_transcribe_diarize' ? 'MOSS' : 'Legacy');
+const pipelineLabel = computed(() => pipelineProfile.value === 'pyannote_moss_asr' ? 'MOSS' : 'Qwen3-ASR');
 
 watch(selectedProfileName, () => {
   privacyConfirmed.value = false;
@@ -129,6 +131,9 @@ function buildDraft(): WorkflowDraft {
   const template = selectedTemplate.value;
   if (!profile) throw new Error('请先在设置中创建一个总结模型 Profile。');
   if (!template) throw new Error('请先在设置中创建一个总结模板。');
+  if (appStore.initialized && !pyannoteReady.value) throw new Error('未检测到 Pyannote 模型，请先在设置中配置模型路径。');
+  if (appStore.initialized && pipelineProfile.value === 'pyannote_qwen3_asr' && !qwenReady.value) throw new Error('未检测到 Qwen3-ASR 模型，请先在设置中配置模型路径。');
+  if (appStore.initialized && pipelineProfile.value === 'pyannote_moss_asr' && !mossReady.value) throw new Error('未检测到 MOSS 模型，请先在设置中配置模型路径。');
   const authMode = profile.auth_mode;
   return {
     draft_version: 2,
@@ -139,9 +144,7 @@ function buildDraft(): WorkflowDraft {
       pipeline_profile_version: 1,
       device_policy: devicePolicy.value,
       audio: {
-        channel_strategy: pipelineProfile.value === 'moss_transcribe_diarize'
-          ? channelStrategy.value
-          : 'mixdown',
+        channel_strategy: 'mixdown',
       },
       language: { mode: 'auto', value: null },
       prompt_input: {
@@ -358,14 +361,20 @@ function updatedAt(snapshot: WorkflowSnapshot): string {
 function phaseLabel(value: string | null | undefined): string {
   const labels: Record<string, string> = {
     starting_transcription: '启动转录',
+    gpu_waiting: '等待本地 GPU 通道',
     audio_normalizing: '解码与标准化音频',
     dependency_importing: '加载运行依赖',
-    model_loading: '加载 MOSS 模型权重',
+    diarization_loading: '加载 Pyannote 说话人模型',
+    diarizing: '分析说话人时间轴',
+    segmenting: '生成安全转录分块',
+    model_loading: '加载 ASR 模型权重',
     processor_loading: '加载音频处理器',
     model_moving_to_device: '迁移模型到推理设备',
     feature_extracting: '提取音频特征',
     generating: '语音识别与说话人分析',
     formatting_transcript: '整理转录结果',
+    transcribing: '按分块执行语音识别',
+    releasing_model: '释放上一阶段显存',
     cloud_asr_request: '调用云端语音识别',
     legacy_transcription: '兼容转录流程',
   };
@@ -418,10 +427,10 @@ function phaseLabel(value: string | null | undefined): string {
         <label>
           <span>转录链路</span>
           <select v-model="pipelineProfile">
-            <option value="moss_transcribe_diarize">MOSS-Diarize（默认）</option>
-            <option value="qwen3_asr_with_pyannote">Legacy Qwen + pyannote（显式回退）</option>
+            <option value="pyannote_qwen3_asr">Pyannote + Qwen3-ASR（推荐）</option>
+            <option value="pyannote_moss_asr" :disabled="appStore.initialized && !mossReady">Pyannote + MOSS{{ appStore.initialized && !mossReady ? '（模型未配置）' : '' }}</option>
           </select>
-          <small v-if="pipelineProfile === 'qwen3_asr_with_pyannote'" class="field-hint">需在设置中配置 Qwen3-ASR 与 pyannote；不会改变 MOSS 默认。</small>
+          <small class="field-hint">两种本地链路都会先执行 Pyannote 说话人分析，再按安全分块转录。</small>
         </label>
         <label>
           <span>推理设备</span>
@@ -442,14 +451,7 @@ function phaseLabel(value: string | null | undefined): string {
         </label>
       </div>
 
-      <label v-if="pipelineProfile === 'moss_transcribe_diarize'">
-        <span>音频声道</span>
-        <select v-model="channelStrategy">
-          <option value="mixdown">自动混音为单声道（推荐）</option>
-          <option value="split_stereo">左右声道分别转写</option>
-        </select>
-        <small class="field-hint">仅适用于左右声道分别录制不同发言人的双通道录音。</small>
-      </label>
+      <p class="field-hint">本地链路统一混音为单声道后执行 Pyannote 说话人分析。</p>
 
       <div v-if="selectedProfile" class="privacy-confirmation">
         <strong>云端总结授权</strong>

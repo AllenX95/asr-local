@@ -11,7 +11,7 @@
       "display_name": "客户访谈 2026-07-10",
       "source": { "path": "D:\\recordings\\customer-interview.wav" },
       "transcription": {
-        "pipeline_profile": "moss_transcribe_diarize",
+        "pipeline_profile": "pyannote_qwen3_asr",
         "pipeline_profile_version": 1,
         "device_policy": "auto",
         "language": { "mode": "auto", "value": null },

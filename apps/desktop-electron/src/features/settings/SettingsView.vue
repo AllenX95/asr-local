@@ -9,7 +9,7 @@ const cloudAsrEnabled = false;
 
 const modelDraft = reactive({
   modelRoot: '',
-  activeLocalAsrModel: 'moss_transcribe_diarize' as LocalAsrModelKey,
+  activeLocalAsrModel: 'qwen3_asr_1_7b' as LocalAsrModelKey,
   qwenPath: '',
   mossPath: '',
   pyannotePath: ''

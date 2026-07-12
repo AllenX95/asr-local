@@ -52,7 +52,7 @@ export const api = {
       config_path: '',
       raw: {
         model_root: 'models',
-        active_local_asr_model: 'moss_transcribe_diarize',
+        active_local_asr_model: 'qwen3_asr_1_7b',
         qwen3_asr_1_7b: { path: 'models/Qwen/Qwen3-ASR-1.7B', required: true, description: '' },
         moss_transcribe_diarize: {
           path: 'models/OpenMOSS-Team/MOSS-Transcribe-Diarize',
@@ -65,7 +65,7 @@ export const api = {
           description: ''
         }
       },
-      active_local_asr_model: 'moss_transcribe_diarize',
+      active_local_asr_model: 'qwen3_asr_1_7b',
       qwen_path: '',
       moss_path: '',
       pyannote_path: '',

@@ -51,16 +51,16 @@ _Avoid_: 自动忽略的错误
 _Avoid_: 模型、后端开关
 
 **链路方案（Pipeline Profile）**:
-用户为工作流任务选择的转录链路类型，包括 MOSS 转录链路、Legacy 转录链路或云端转录链路。
+用户为工作流任务选择的转录链路类型，包括 Pyannote + Qwen3-ASR、Pyannote + MOSS 或云端转录链路。
 _Avoid_: 全局活动模型、enable diarization
 
-**MOSS 转录链路（MOSS Pipeline）**:
-使用 MOSS-Transcribe-Diarize 在同一链路中完成长音频转录、时间戳和说话人区分的转录链路。
-_Avoid_: MOSS + pyannote
+**Pyannote + Qwen3-ASR 链路（Qwen Chunked Pipeline）**:
+先由 Pyannote 生成说话人时间轴，再按安全分块调用 Qwen3-ASR；Qwen 是默认本地 ASR 后端。
+_Avoid_: 把 Qwen 作为全局活动模型隐式选择
 
-**Legacy 转录链路（Legacy Pipeline）**:
-保留的 pyannote 说话人分离与 Qwen3-ASR 转录组合链路，用于兼容和结果对照。
-_Avoid_: 默认链路、旧 Worker
+**Pyannote + MOSS 链路（MOSS Chunked Pipeline）**:
+先由 Pyannote 生成说话人时间轴，再按安全分块调用 MOSS；MOSS 内部 speaker 结果不是最终权威。
+_Avoid_: 将整段长音频直接送入 MOSS
 
 **录音背景（Recording Background）**:
 帮助转录链路理解录音场景、参与者和主题的上下文信息。

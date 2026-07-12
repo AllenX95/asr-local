@@ -1,3 +1,5 @@
+import type { PipelineProfile } from '../ipc/workerTypes';
+
 export type WorkflowStatus =
   | 'queued'
   | 'running'
@@ -23,7 +25,7 @@ export interface WorkflowSpec {
   spec_version: 2
   display_name: string
   source: Record<string, unknown>
-  transcription: Record<string, unknown>
+  transcription: Record<string, unknown> & { pipeline_profile?: PipelineProfile }
   summary: Record<string, unknown>
   output: Record<string, unknown>
 }

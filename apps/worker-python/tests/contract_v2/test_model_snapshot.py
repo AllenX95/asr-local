@@ -19,6 +19,14 @@ class ModelSnapshotTests(unittest.TestCase):
         components = resolve_model_components("qwen3_asr_with_pyannote")
         self.assertEqual([item["role"] for item in components], ["transcriber", "diarization"])
 
+    def test_chunked_moss_snapshot_includes_diarization_component(self) -> None:
+        components = resolve_model_components("pyannote_moss_asr")
+        self.assertEqual([item["role"] for item in components], ["transcriber", "diarization"])
+
+    def test_chunked_qwen_snapshot_includes_diarization_component(self) -> None:
+        components = resolve_model_components("pyannote_qwen3_asr")
+        self.assertEqual([item["role"] for item in components], ["transcriber", "diarization"])
+
 
 if __name__ == "__main__":
     unittest.main()

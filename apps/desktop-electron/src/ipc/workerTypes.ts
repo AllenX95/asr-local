@@ -1,5 +1,6 @@
 export type ViewKey = 'workflow' | 'markdown' | 'history' | 'settings';
 export type LocalAsrModelKey = 'qwen3_asr_1_7b' | 'moss_transcribe_diarize';
+export type PipelineProfile = 'pyannote_qwen3_asr' | 'pyannote_moss_asr' | 'cloud_asr';
 
 export interface AsrCloudProfile {
   id?: string;

@@ -5,7 +5,7 @@
   "request_id": "req_prompt_001",
   "method": "prompt.preview",
   "params": {
-    "pipeline_profile": "moss_transcribe_diarize",
+    "pipeline_profile": "pyannote_qwen3_asr",
     "language": { "mode": "auto", "value": null },
     "prompt_input": { "recording_background": "产品评审会议", "hotwords": ["MOSS"], "extra_instruction": "" }
   }

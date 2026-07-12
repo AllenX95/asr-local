@@ -679,7 +679,7 @@ Response 至少包含：
 
 ```json
 {
-  "pipeline_profile": "moss_transcribe_diarize",
+  "pipeline_profile": "pyannote_qwen3_asr",
   "language": { "mode": "auto", "value": null },
   "prompt_input": {
     "recording_background": "这是一次产品评审会议。",
@@ -693,9 +693,9 @@ Response：
 
 ```json
 {
-  "compiler_id": "moss-prompt",
+  "compiler_id": "qwen-prompt",
   "compiler_version": 1,
-  "base_template_version": "openmoss-official-2026-07-09",
+  "base_template_version": "qwen-segment-v1",
   "compiled_text": "请将音频转写为文本……",
   "sha256": "hex-digest",
   "warnings": []

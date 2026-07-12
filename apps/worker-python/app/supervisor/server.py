@@ -113,17 +113,18 @@ class V2StdioServer:
         time.
         """
         from app.pipeline.cloud_asr import CloudAsrTranscriber
+        from app.pipeline.chunked_local import ChunkedLocalTranscriber
         from app.pipeline.legacy_v2 import LegacyQwenPyannoteTranscriber
-        from app.pipeline.moss_v2 import MossTranscriber
         from app.pipeline.router import ProfileRoutingTranscriber
         from app.summary.openai_compatible import OpenAICompatibleSummaryGenerator
 
         return WorkflowSupervisor(
             self.registry,
             transcriber=ProfileRoutingTranscriber(
-                moss=MossTranscriber(),
+                moss=ChunkedLocalTranscriber(model_key="moss_transcribe_diarize", backend_id="pyannote_moss_asr"),
                 cloud=CloudAsrTranscriber(secret_provider=self.secret_provider),
                 legacy=LegacyQwenPyannoteTranscriber(),
+                qwen=ChunkedLocalTranscriber(model_key="qwen3_asr_1_7b", backend_id="pyannote_qwen3_asr"),
             ),
             summary_generator=OpenAICompatibleSummaryGenerator(secret_provider=self.secret_provider),
             event_sink=self._emit_event,
@@ -269,7 +270,7 @@ def capabilities(*, requested_pipeline_mode: str = "auto", resolved_pipeline_mod
             "secret.provide",
             "runtime.shutdown",
         ],
-        "pipeline_profiles": ["moss_transcribe_diarize", "qwen3_asr_with_pyannote", "cloud_asr"],
+        "pipeline_profiles": ["pyannote_qwen3_asr", "pyannote_moss_asr", "cloud_asr", "moss_transcribe_diarize", "qwen3_asr_with_pyannote"],
         "max_inflight_workflows": 3,
         "event_recovery": "snapshot_reconcile",
         "secret_transport": "ephemeral_grant",
@@ -284,8 +285,8 @@ def capabilities(*, requested_pipeline_mode: str = "auto", resolved_pipeline_mod
 def resolve_pipeline_mode(requested: str) -> str:
     """Resolve the safe v2 default without hiding an explicit operator choice.
 
-    ``auto`` selects production only when the configured MOSS model and its
-    native runtime dependencies are present. A missing optional dependency or
+    ``auto`` selects production when the configured default Qwen + Pyannote
+    runtime dependencies are present. A missing optional dependency or
     model keeps the desktop usable for UI/recovery testing, while explicit
     ``production`` still fails loudly when the operator requests it.
     """
@@ -297,7 +298,8 @@ def resolve_pipeline_mode(requested: str) -> str:
         from app.runtime.env import environment_snapshot
 
         snapshot = environment_snapshot()
-        moss = snapshot["models"]["moss_transcribe_diarize"]
+        qwen = snapshot["models"]["qwen3_asr_1_7b"]
+        pyannote = snapshot["models"]["pyannote_speaker_diarization"]
         optional = snapshot["optional_modules"]
         torch_runtime = snapshot.get("torch_runtime")
         torch_ready = (
@@ -306,9 +308,11 @@ def resolve_pipeline_mode(requested: str) -> str:
             else bool(optional.get("torch"))
         )
         native_ready = (
-            bool(moss.get("exists"))
+            bool(qwen.get("exists"))
+            and bool(pyannote.get("exists"))
             and torch_ready
-            and bool(optional.get("transformers"))
+            and bool(optional.get("qwen_asr"))
+            and bool(optional.get("pyannote.audio"))
             and importlib.util.find_spec("soundfile") is not None
         )
     except Exception:
@@ -318,9 +322,11 @@ def resolve_pipeline_mode(requested: str) -> str:
 
 def _prompt_preview(params: dict[str, Any]) -> dict[str, Any]:
     prompt_input = params.get("prompt_input", {})
+    profile = str(params.get("pipeline_profile", "pyannote_qwen3_asr"))
     parts = [
-        "请将音频转写为文本，每一段需以起始时间戳和说话人编号（[S01]、[S02]、[S03]…）开头，"
-        "正文为对应的语音内容，并在段末标注结束时间戳，以清晰标明该段语音范围。"
+        "请将音频转写为文本，保留清晰的时间范围和自然段落。"
+        if profile in {"moss_transcribe_diarize", "pyannote_moss_asr"}
+        else "请准确转写音频内容，保留原意、专有名词和自然段落，不要添加音频中不存在的信息。"
     ]
     if prompt_input.get("recording_background"):
         parts.append(f"录音背景：\n{prompt_input['recording_background']}")
@@ -332,9 +338,9 @@ def _prompt_preview(params: dict[str, Any]) -> dict[str, Any]:
     import hashlib
 
     return {
-        "compiler_id": "moss-prompt",
+        "compiler_id": "moss-prompt" if profile in {"moss_transcribe_diarize", "pyannote_moss_asr"} else "qwen-prompt",
         "compiler_version": 1,
-        "base_template_version": "openmoss-official-2026-07-09",
+        "base_template_version": "openmoss-official-2026-07-09" if profile in {"moss_transcribe_diarize", "pyannote_moss_asr"} else "qwen-segment-v1",
         "compiled_text": compiled_text,
         "sha256": hashlib.sha256(compiled_text.encode("utf-8")).hexdigest(),
         "warnings": [],
@@ -353,12 +359,12 @@ def _production_startup_error(error: Exception) -> dict[str, Any]:
     dependency = getattr(error, "name", None) or "the native inference runtime"
     return {
         "code": "DEPENDENCY_MISSING" if isinstance(error, ImportError) else "RUNTIME_INIT_FAILED",
-        "message": f"MOSS production runtime cannot start: {dependency}",
+        "message": f"Local ASR production runtime cannot start: {dependency}",
         "retryable": False,
         "field_errors": [],
         "details": {
             "dependency": dependency,
-            "hint": "Install the worker's moss-native dependencies in apps/worker-python/.venv and restart the desktop app.",
+            "hint": "Install the worker's inference dependencies in the configured Python runtime and restart the desktop app.",
         },
         "diagnostic_id": "diag-v2-missing-dependency",
     }

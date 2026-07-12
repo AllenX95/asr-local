@@ -2,7 +2,7 @@
 # Put the downloaded model directories under ./models and keep this file updated if you use different names.
 
 model_root = "models"
-active_local_asr_model = "moss_transcribe_diarize"
+active_local_asr_model = "qwen3_asr_1_7b"
 
 [qwen3_asr_1_7b]
 path = "models/Qwen/Qwen3-ASR-1.7B"

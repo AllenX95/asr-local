@@ -156,13 +156,13 @@ export class HostServices {
   async loadModelsConfig(): Promise<JsonObject> {
     const configPath = path.join(this.configDir, 'models.toml')
     const defaults = {
-      model_root: 'models', active_local_asr_model: 'moss_transcribe_diarize',
+      model_root: 'models', active_local_asr_model: 'qwen3_asr_1_7b',
       qwen3_asr_1_7b: defaultModel('models/Qwen/Qwen3-ASR-1.7B', true, 'Manual local path for the downloaded Qwen3-ASR-1.7B model directory.'),
       moss_transcribe_diarize: defaultModel('models/OpenMOSS-Team/MOSS-Transcribe-Diarize', false, 'Manual local path for the downloaded MOSS-Transcribe-Diarize model directory.'),
       pyannote_speaker_diarization: defaultModel('models/pyannote/speaker-diarization-community-1', true, 'Manual local path for the downloaded pyannote speaker diarization model directory.'),
     }
     const raw = { ...defaults, ...(await readToml(configPath, defaults)) }
-    const active = String(raw.active_local_asr_model || 'moss_transcribe_diarize')
+    const active = String(raw.active_local_asr_model || 'qwen3_asr_1_7b')
     if (!['qwen3_asr_1_7b', 'moss_transcribe_diarize'].includes(active)) throw new Error(`unsupported active_local_asr_model: ${active}`)
     const resolveModel = (entry: JsonObject) => path.isAbsolute(entry.path) ? entry.path : path.join(this.projectRoot, entry.path)
     const qwenPath = resolveModel(raw.qwen3_asr_1_7b)

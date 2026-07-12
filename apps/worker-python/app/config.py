@@ -5,7 +5,7 @@ from pathlib import Path
 import os
 import tomllib
 
-DEFAULT_LOCAL_ASR_MODEL = "moss_transcribe_diarize"
+DEFAULT_LOCAL_ASR_MODEL = "qwen3_asr_1_7b"
 SUPPORTED_LOCAL_ASR_MODELS = {
     "qwen3_asr_1_7b",
     "moss_transcribe_diarize",

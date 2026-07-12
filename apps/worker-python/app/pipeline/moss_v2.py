@@ -31,11 +31,12 @@ def _normalize_for_moss(source_path: Path, channel_strategy: str) -> NormalizedA
 
 
 class MossTranscriber:
-    """Production MOSS adapter for a v2 task spec.
+    """Compatibility adapter for direct MOSS smoke tests.
 
-    It receives one full normalized audio stream per task. The v1 30-second
-    segment loop is intentionally not used here, so speaker labels remain in
-    the model's own long-context output.
+    Production workflow routing uses ``ChunkedLocalTranscriber`` so Pyannote
+    owns speaker boundaries and MOSS only receives short ASR chunks. This
+    class remains for isolated native adapter fixtures and backwards
+    compatibility while that migration settles.
     """
 
     def __init__(self) -> None:
