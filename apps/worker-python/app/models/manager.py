@@ -368,7 +368,13 @@ class ModelManager:
             if not self.qwen_path.exists():
                 raise FileNotFoundError(f"Qwen model path does not exist: {self.qwen_path}")
 
-            from qwen_asr import Qwen3ASRModel
+            try:
+                from qwen_asr import Qwen3ASRModel
+            except Exception as exc:
+                raise RuntimeError(
+                    "QWEN_RUNTIME_UNAVAILABLE: qwen-asr cannot be imported in the selected Python runtime; "
+                    "install the inference extra in a Transformers-compatible runtime."
+                ) from exc
 
             self._qwen_model = Qwen3ASRModel.from_pretrained(
                 str(self.qwen_path),
@@ -439,6 +445,13 @@ class ModelManager:
     def close_pyannote_pipeline(self) -> None:
         pipeline = self._pyannote_pipeline
         self._pyannote_pipeline = None
+        if pipeline is not None:
+            try:
+                move_to = getattr(pipeline, "to", None)
+                if callable(move_to):
+                    move_to(self.torch.device("cpu"))
+            except Exception:
+                LOGGER.debug("failed to move Pyannote pipeline to CPU during cleanup", exc_info=True)
         release_gpu_resources(pipeline, torch_module=self._torch, label="pyannote")
 
     def close_local_models(self) -> None:
