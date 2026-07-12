@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import io
-from collections import deque
-import threading
+from unittest import mock
 import unittest
 
 from app.models.manager import ModelManager
-from app.pipeline.qwen_subprocess import QwenSubprocessAdapter
 
 
 class QwenRuntimeTests(unittest.TestCase):
@@ -16,15 +13,20 @@ class QwenRuntimeTests(unittest.TestCase):
             1,
         )
 
-    def test_stderr_drain_keeps_a_bounded_tail(self):
-        adapter = QwenSubprocessAdapter.__new__(QwenSubprocessAdapter)
-        adapter._stderr_tail = deque(maxlen=40)
-        adapter._lock = threading.RLock()
-        process = type("Process", (), {"stderr": io.StringIO("first warning\nsecond warning\n")})()
+    @mock.patch("qwen_asr.Qwen3ASRModel.from_pretrained")
+    def test_qwen_loads_in_the_main_runtime(self, load_model):
+        sentinel = object()
+        load_model.return_value = sentinel
+        manager = ModelManager(active_local_asr_model_override="qwen3_asr_1_7b")
 
-        adapter._drain_stderr(process)
-
-        self.assertEqual(list(adapter._stderr_tail), ["first warning", "second warning"])
+        self.assertIs(manager.get_qwen_model(), sentinel)
+        load_model.assert_called_once_with(
+            str(manager.qwen_path),
+            dtype=manager.qwen_torch_dtype(),
+            device_map=manager.device_map(),
+            max_inference_batch_size=1,
+            max_new_tokens=256,
+        )
 
 
 if __name__ == "__main__":

@@ -5,7 +5,6 @@ from types import SimpleNamespace
 from typing import Any
 from pathlib import Path
 import re
-import sys
 import warnings
 
 from app.config import DEFAULT_LOCAL_ASR_MODEL, load_models_config, project_root
@@ -371,34 +370,20 @@ class ModelManager:
             if not self.qwen_path.exists():
                 raise FileNotFoundError(f"Qwen model path does not exist: {self.qwen_path}")
 
-            from app.pipeline.qwen_subprocess import QwenSubprocessAdapter, resolve_qwen_python
+            try:
+                from qwen_asr import Qwen3ASRModel
+            except Exception as exc:
+                raise RuntimeError(
+                    "QWEN_RUNTIME_UNAVAILABLE: qwen-asr cannot be imported in the main Python runtime."
+                ) from exc
 
-            qwen_python = resolve_qwen_python()
-            if qwen_python is not None and qwen_python != Path(sys.executable).resolve():
-                self._qwen_model = QwenSubprocessAdapter(
-                    python_executable=qwen_python,
-                    model_path=self.qwen_path,
-                    device=self.device_map(),
-                    dtype=self.qwen_torch_dtype(),
-                    batch_size=self.local_asr_batch_size(),
-                    max_new_tokens=256,
-                )
-            else:
-                try:
-                    from qwen_asr import Qwen3ASRModel
-                except Exception as exc:
-                    raise RuntimeError(
-                        "QWEN_RUNTIME_UNAVAILABLE: qwen-asr cannot be imported in the selected Python runtime; "
-                        "set ASR_LOCAL_QWEN_PYTHON to a Transformers-compatible Qwen runtime."
-                    ) from exc
-
-                self._qwen_model = Qwen3ASRModel.from_pretrained(
-                    str(self.qwen_path),
-                    dtype=self.qwen_torch_dtype(),
-                    device_map=self.device_map(),
-                    max_inference_batch_size=self.local_asr_batch_size(),
-                    max_new_tokens=256,
-                )
+            self._qwen_model = Qwen3ASRModel.from_pretrained(
+                str(self.qwen_path),
+                dtype=self.qwen_torch_dtype(),
+                device_map=self.device_map(),
+                max_inference_batch_size=self.local_asr_batch_size(),
+                max_new_tokens=256,
+            )
         return self._qwen_model
 
     def get_moss_model(self):
