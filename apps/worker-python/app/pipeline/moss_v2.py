@@ -60,6 +60,7 @@ class MossTranscriber:
             raise FileNotFoundError(f"MOSS model path does not exist: {model_path}")
         if not source_path.is_file():
             raise FileNotFoundError(f"source audio does not exist: {source_path}")
+        emit_progress({"phase": "dependency_importing", "detail": "正在确认 MOSS 推理依赖"})
         try:
             import torch
         except ModuleNotFoundError as exc:
@@ -88,8 +89,6 @@ class MossTranscriber:
                     progress=emit_progress,
                 )
                 self._model_key = model_key
-            emit_progress({"phase": "model_loading", "detail": "正在准备 MOSS 模型"})
-            emit_progress({"phase": "generating", "detail": "正在执行语音识别与说话人分析"})
             output = self._model_adapter.transcribe(
                 audio=[(stream.audio, stream.sample_rate) for stream in normalized.streams],
                 context=[transcription["prompt_snapshot"]["compiled_text"]] * len(normalized.streams),

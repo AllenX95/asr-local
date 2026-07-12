@@ -98,7 +98,7 @@ class MossV2AdapterTests(unittest.TestCase):
         self.assertEqual(fake_adapter.calls[0]["context"], ["context", "context"])
         self.assertIn("Channel 1 / S01: left", result["text"])
         self.assertIn("Channel 2 / S02: right", result["text"])
-        self.assertEqual(phases, ["audio_normalizing", "model_loading", "generating", "formatting_transcript"])
+        self.assertEqual(phases, ["dependency_importing", "audio_normalizing", "formatting_transcript"])
 
 
 if __name__ == "__main__":

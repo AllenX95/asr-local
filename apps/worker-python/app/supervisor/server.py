@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import logging
 import sys
+import time
 from typing import Any
 
 from app.ipc.v2 import ProtocolError, decode_request, encode_event, encode_response
@@ -11,6 +13,9 @@ from app.config import project_root, state_dir
 from app.workflow.registry import WorkflowRegistry
 from app.workflow.supervisor import WorkflowSupervisor
 from app.workflow.secrets import EphemeralSecretBroker, SecretRequest
+
+
+LOGGER = logging.getLogger("asr_local.worker.runtime")
 
 
 class BrokerSecretProvider:
@@ -67,8 +72,9 @@ class V2StdioServer:
         self.startup_error: dict[str, Any] | None = None
         if self.pipeline_mode == "production":
             try:
+                self._preload_production_dependencies()
                 self.supervisor = self._production_supervisor()
-            except (ImportError, OSError) as exc:
+            except (ImportError, OSError, RuntimeError) as exc:
                 self.startup_error = _production_startup_error(exc)
                 self.supervisor = WorkflowSupervisor(self.registry, event_sink=self._emit_event)
         else:
@@ -80,6 +86,22 @@ class V2StdioServer:
         self._stdout_lock = asyncio.Lock()
         self._defer_events = False
         self._deferred_events: list[dict[str, Any]] = []
+
+    def _preload_production_dependencies(self) -> None:
+        """Initialize native inference imports on the process main thread.
+
+        Importing torch/transformers for the first time from an asyncio worker
+        thread can deadlock with optional dependency initialization on Windows.
+        Production startup pays this cost once before any executor thread or
+        workflow can exist.
+        """
+        started = time.perf_counter()
+        LOGGER.info("preloading production inference dependencies on main thread")
+        import torch
+        from transformers import AutoModelForCausalLM, AutoProcessor
+
+        self._preloaded_inference_dependencies = (torch, AutoModelForCausalLM, AutoProcessor)
+        LOGGER.info("production inference dependencies ready | elapsed_seconds=%.3f", time.perf_counter() - started)
 
     def _production_supervisor(self) -> WorkflowSupervisor:
         """Load native adapters only after production mode is selected.
