@@ -50,10 +50,7 @@ The production mode requires the local inference dependencies. Summary and Cloud
 ASR bearer credentials use the ephemeral secret broker and trusted desktop
 bridge. The only local profile is `pyannote_qwen3_asr`.
 
-Qwen3-ASR 0.0.6 and Pyannote run in the same Python environment. The main
-runtime uses the pinned Qwen-compatible Transformers version directly; there is
-no Qwen child process, `.venv-qwen`, `runtime/qwen-python`, or
-`ASR_LOCAL_QWEN_PYTHON` setting.
+Qwen3-ASR 0.0.6 and Pyannote run in the same Python environment. The main runtime uses the pinned Qwen-compatible Transformers version directly, with one local inference runtime and no secondary ASR child process.
 
 The Electron host accepts `ASR_LOCAL_V2_PIPELINE_MODE=auto|production|fake`.
 The default is `auto`: it resolves to production when Qwen3-ASR, Pyannote,

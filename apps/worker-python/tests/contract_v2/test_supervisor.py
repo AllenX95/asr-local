@@ -60,7 +60,7 @@ def make_draft(source: Path, name: str = "sample") -> dict:
             "pipeline_profile_version": 1,
             "device_policy": "auto",
             "language": {"mode": "auto", "value": None},
-            "prompt_input": {"recording_background": "meeting", "hotwords": ["MOSS"], "extra_instruction": ""},
+            "prompt_input": {"recording_background": "meeting", "hotwords": ["Qwen"], "extra_instruction": ""},
             "postprocess": {"replacements": [], "keep_fillers": True, "auto_punctuation": True},
             "cloud_profile": None,
         },

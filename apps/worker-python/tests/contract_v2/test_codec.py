@@ -22,10 +22,10 @@ class ContractV2CodecTests(unittest.TestCase):
 
     def test_submit_normalizes_hotwords_and_preserves_replacement(self) -> None:
         payload = json.loads((FIXTURES / "workflow-submit.request.json").read_text(encoding="utf-8"))
-        payload["params"]["draft"]["transcription"]["prompt_input"]["hotwords"] = ["MOSS", "moss", " ASR Local "]
+        payload["params"]["draft"]["transcription"]["prompt_input"]["hotwords"] = ["Qwen", "qwen", " ASR Local "]
         decoded = decode_request(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
         draft = decoded["params"]["draft"]
-        self.assertEqual(draft["transcription"]["prompt_input"]["hotwords"], ["MOSS", "ASR Local"])
+        self.assertEqual(draft["transcription"]["prompt_input"]["hotwords"], ["Qwen", "ASR Local"])
         self.assertEqual(
             draft["transcription"]["postprocess"]["replacements"],
             [{"wrong": "ASRLocal", "correct": "ASR Local"}],

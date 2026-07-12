@@ -38,7 +38,7 @@ class ChunkedRouterTests(unittest.TestCase):
 
         async def run():
             with self.assertRaisesRegex(RuntimeError, "UNSUPPORTED_PIPELINE_PROFILE"):
-                await router.transcribe({"transcription": {"pipeline_profile": "pyannote_moss_asr"}}, "x")
+                await router.transcribe({"transcription": {"pipeline_profile": "legacy_asr"}}, "x")
 
         asyncio.run(run())
 

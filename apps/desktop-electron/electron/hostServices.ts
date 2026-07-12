@@ -4,7 +4,10 @@ import { copyFile, mkdir, readFile, readdir, rename, stat, writeFile } from 'nod
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import * as TOML from '@iarna/toml'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
+const TOML = require('./vendor/toml/toml.js') as typeof import('@iarna/toml')
 
 type JsonObject = Record<string, any>
 const defaultModel = (modelPath: string, required: boolean, description: string) => ({ path: modelPath, required, description })

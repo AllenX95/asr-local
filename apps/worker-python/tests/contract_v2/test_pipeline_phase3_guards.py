@@ -29,12 +29,12 @@ class PipelineGuardTests(unittest.TestCase):
             output_dir=Path("outputs"),
             output_file_name="audio.md",
             context_text="customer meeting",
-            terms=["MOSS"],
+            terms=["Qwen"],
             replacements=[ReplacementRule("ASRLocal", "ASR Local")],
         )
         context = build_context(task)
         self.assertIn("customer meeting", context)
-        self.assertIn("MOSS", context)
+        self.assertIn("Qwen", context)
         self.assertNotIn("ASR Local", context)
 
     def test_task_result_model_identity_is_qwen(self) -> None:

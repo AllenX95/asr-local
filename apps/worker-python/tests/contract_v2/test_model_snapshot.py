@@ -10,8 +10,8 @@ class ModelSnapshotTests(unittest.TestCase):
         components = resolve_model_components("pyannote_qwen3_asr")
         self.assertEqual([item["role"] for item in components], ["transcriber", "diarization"])
 
-    def test_removed_profiles_have_no_snapshot(self) -> None:
-        for profile in ("pyannote_moss_asr", "moss_transcribe_diarize", "qwen3_asr_with_pyannote"):
+    def test_unknown_profile_has_no_snapshot(self) -> None:
+        for profile in ("legacy_asr",):
             with self.subTest(profile=profile):
                 self.assertEqual(resolve_model_components(profile), [])
 

@@ -9,7 +9,7 @@
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
-    "electron:compile": "tsc -p tsconfig.electron.json",
+    "electron:compile": "tsc -p tsconfig.electron.json && node electron/copyMainRuntimeDeps.cjs",
     "electron:dev": "npm run electron:compile && concurrently -k \"vite --host 127.0.0.1 --port 1420\" \"wait-on http://127.0.0.1:1420 && cross-env ELECTRON_RENDERER_URL=http://127.0.0.1:1420 electron .\"",
     "electron:debug": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/dev/start_electron_debug.ps1 -DataProfile real",
     "electron:debug:isolated": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/dev/start_electron_debug.ps1 -DataProfile isolated",
@@ -55,13 +55,15 @@
     "appId": "local.asr.desktop",
     "productName": "ASR Local",
     "asar": false,
+    "npmRebuild": true,
     "directories": {
       "output": "release-electron"
     },
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
-      "package.json"
+      "package.json",
+      "dist-electron/vendor/toml/**/*"
     ],
     "extraResources": [
       {
@@ -71,7 +73,9 @@
           "app/**/*",
           "scripts/**/*",
           "pyproject.toml",
-          "README.md"
+          "README.md",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
         ]
       },
       {
@@ -88,7 +92,9 @@
       }
     ],
     "win": {
-      "target": ["nsis"],
+      "target": [
+        "nsis"
+      ],
       "icon": "electron/resources/icon.ico",
       "signAndEditExecutable": false
     },
@@ -96,6 +102,7 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "deleteAppDataOnUninstall": false
-    }
+    },
+    "beforeBuild": "electron/beforeBuild.cjs"
   }
 }

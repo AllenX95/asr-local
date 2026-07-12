@@ -35,7 +35,7 @@ describe('FakeWorkflowRuntime', () => {
     const preview = await runtime.previewPrompt({
       pipeline_profile: 'pyannote_qwen3_asr',
       language: { mode: 'auto', value: null },
-      prompt_input: { recording_background: 'meeting', hotwords: ['MOSS'] },
+      prompt_input: { recording_background: 'meeting', hotwords: ['Qwen'] },
     })
     expect(preview.compiled_text).toContain('meeting')
     expect(events).toEqual([`${created.workflow_id}:1`])

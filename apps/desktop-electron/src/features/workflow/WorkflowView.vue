@@ -480,7 +480,7 @@ function phaseLabel(value: string | null | undefined): string {
       <div class="two-col">
         <label>
           <span>热词（每行一个）</span>
-          <textarea v-model="hotwordsText" rows="4" placeholder="MOSS\nASR Local" />
+          <textarea v-model="hotwordsText" rows="4" placeholder="Qwen\nASR Local" />
         </label>
         <label>
           <span>额外转录指令</span>
