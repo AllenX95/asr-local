@@ -352,9 +352,11 @@ class ModelManager:
         )
 
     def local_asr_batch_size(self) -> int:
-        if self.active_local_asr_model == MOSS_MODEL_KEY:
-            return 1
-        return 2
+        # Qwen segments are intentionally serialized.  Pyannote has already
+        # bounded the request size, and a batch of two can double the decoder
+        # activation peak on 16 GiB cards.  Keep this conservative until a
+        # hardware gate proves a larger batch is safe.
+        return 1
 
     def local_asr_uses_integrated_diarization(self) -> bool:
         return self.active_local_asr_model == MOSS_MODEL_KEY
@@ -394,7 +396,7 @@ class ModelManager:
                     str(self.qwen_path),
                     dtype=self.qwen_torch_dtype(),
                     device_map=self.device_map(),
-                    max_inference_batch_size=2,
+                    max_inference_batch_size=self.local_asr_batch_size(),
                     max_new_tokens=256,
                 )
         return self._qwen_model

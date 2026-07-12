@@ -590,6 +590,16 @@ def transcribe_segments(
         cloud_client = CloudAsrClient(task.cloud_asr_profile)
         batch_size = 1
     else:
+        if manager.active_local_asr_model == "qwen3_asr_1_7b":
+            _emit(
+                emit,
+                task,
+                stage="model_loading",
+                progress=0.40,
+                total_ms=total_ms,
+                processed_ms=0,
+                payload={"asr_model": manager.local_asr_model_name()},
+            )
         model = manager.get_local_asr_model()
         cloud_client = None
         batch_size = min(ASR_SEGMENT_BATCH_SIZE, manager.local_asr_batch_size())
