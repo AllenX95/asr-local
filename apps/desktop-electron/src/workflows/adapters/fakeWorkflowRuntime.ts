@@ -34,7 +34,7 @@ export class FakeWorkflowRuntime implements WorkflowRuntime {
   async capabilities(): Promise<WorkflowCapabilities> {
     return {
       max_inflight_workflows: 3,
-      pipeline_profiles: ['pyannote_qwen3_asr', 'pyannote_moss_asr'],
+      pipeline_profiles: ['pyannote_qwen3_asr', 'cloud_asr'],
       methods: ['workflow.submit', 'workflow.list', 'workflow.get', 'workflow.clear', 'workflow.control', 'workflow.retry', 'artifact.register_revision'],
     }
   }
@@ -42,11 +42,11 @@ export class FakeWorkflowRuntime implements WorkflowRuntime {
   async previewPrompt(input: PromptPreviewInput): Promise<PromptPreviewResult> {
     const background = String(input.prompt_input.recording_background ?? '').trim()
     const hotwords = Array.isArray(input.prompt_input.hotwords) ? input.prompt_input.hotwords.join(', ') : ''
-    const compiled_text = ['MOSS official output format', background, hotwords ? `Hotwords: ${hotwords}` : '']
+    const compiled_text = ['Qwen3-ASR transcript format', background, hotwords ? `Hotwords: ${hotwords}` : '']
       .filter(Boolean)
       .join('\n\n')
     return {
-      compiler_id: 'fake-moss-prompt',
+      compiler_id: 'fake-qwen-prompt',
       compiler_version: 1,
       base_template_version: 'fake',
       compiled_text,

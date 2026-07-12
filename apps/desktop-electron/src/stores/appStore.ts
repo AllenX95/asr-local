@@ -5,7 +5,6 @@ import type {
   AsrCloudProfile,
   AsrProfilesState,
   HistoryItem,
-  LocalAsrModelKey,
   ModelsConfig,
   SummaryProfile,
   SummaryProfilesState,
@@ -137,8 +136,8 @@ export const useAppStore = defineStore('app', {
       this.summary.selectedTemplateName = name;
       this.summary.prompt = this.summaryTemplates.find((item) => item.name === name)?.prompt || '';
     },
-    async saveModelPaths(modelRoot: string, active: LocalAsrModelKey, qwen: string, moss: string, pyannote: string) {
-      try { this.settings.models = await api.saveModelPaths(modelRoot, active, qwen, moss, pyannote); this.setStatus('模型配置已保存', this.settings.models.config_path); }
+    async saveModelPaths(modelRoot: string, qwen: string, pyannote: string) {
+      try { this.settings.models = await api.saveModelPaths(modelRoot, qwen, pyannote); this.setStatus('模型配置已保存', this.settings.models.config_path); }
       catch (error) { this.setError('模型配置保存失败', error); }
     },
     async saveAsrProfile(profile: AsrCloudProfile) {

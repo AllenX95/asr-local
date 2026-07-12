@@ -34,10 +34,8 @@ const recentExpanded = ref(true);
 const diagnosticsExpanded = ref(false);
 const pyannoteReady = computed(() => appStore.settings.models?.pyannote_exists ?? false);
 const qwenReady = computed(() => appStore.settings.models?.qwen_exists ?? false);
-const mossReady = computed(() => appStore.settings.models?.moss_exists ?? false);
 const runtimeReadiness = computed(() => (appStore.settings.health?.model_readiness ?? null) as Record<string, any> | null);
 const qwenRuntimeReady = computed(() => runtimeReadiness.value ? Boolean(runtimeReadiness.value.qwen?.runtime_ready) : true);
-const mossRuntimeReady = computed(() => runtimeReadiness.value ? Boolean(runtimeReadiness.value.moss?.runtime_ready) : true);
 
 const availableProfiles = computed<WorkflowSummaryProfile[]>(() => {
   if (catalogs.value.summary_profiles.length) return catalogs.value.summary_profiles;
@@ -71,7 +69,7 @@ const providerAuthorizationText = computed(() => {
   if (selectedProfile.value) notices.push(`总结文本将发送到 ${selectedProfile.value.base_url}，使用模型 ${selectedProfile.value.model}`);
   return notices.length ? `${notices.join('；')}。` : '';
 });
-const pipelineLabel = computed(() => pipelineProfile.value === 'pyannote_moss_asr' ? 'MOSS' : 'Qwen3-ASR');
+const pipelineLabel = computed(() => 'Qwen3-ASR');
 
 watch(selectedProfileName, () => {
   privacyConfirmed.value = false;
@@ -135,8 +133,7 @@ function buildDraft(): WorkflowDraft {
   if (!profile) throw new Error('请先在设置中创建一个总结模型 Profile。');
   if (!template) throw new Error('请先在设置中创建一个总结模板。');
   if (appStore.initialized && !pyannoteReady.value) throw new Error('未检测到 Pyannote 模型，请先在设置中配置模型路径。');
-  if (appStore.initialized && pipelineProfile.value === 'pyannote_qwen3_asr' && (!qwenReady.value || !qwenRuntimeReady.value)) throw new Error('Qwen3-ASR 模型或隔离运行时不可用，请先安装 Qwen runtime 并检查模型路径。');
-  if (appStore.initialized && pipelineProfile.value === 'pyannote_moss_asr' && (!mossReady.value || !mossRuntimeReady.value)) throw new Error('MOSS 模型或主运行时不可用，请先检查模型与 Python runtime。');
+  if (appStore.initialized && (!qwenReady.value || !qwenRuntimeReady.value)) throw new Error('Qwen3-ASR 模型或 Python inference runtime 不可用，请检查依赖和模型路径。');
   const authMode = profile.auth_mode;
   return {
     draft_version: 2,
@@ -432,9 +429,8 @@ function phaseLabel(value: string | null | undefined): string {
           <span>转录链路</span>
           <select v-model="pipelineProfile">
             <option value="pyannote_qwen3_asr">Pyannote + Qwen3-ASR（推荐）</option>
-            <option value="pyannote_moss_asr" :disabled="appStore.initialized && (!mossReady || !mossRuntimeReady)">Pyannote + MOSS{{ appStore.initialized && (!mossReady || !mossRuntimeReady) ? '（运行时未就绪）' : '' }}</option>
           </select>
-          <small class="field-hint">两种本地链路都会先执行 Pyannote 说话人分析，再按安全分块转录。</small>
+          <small class="field-hint">先执行 Pyannote 说话人分析，再按安全分块使用 Qwen3-ASR 转录。</small>
         </label>
         <label>
           <span>推理设备</span>

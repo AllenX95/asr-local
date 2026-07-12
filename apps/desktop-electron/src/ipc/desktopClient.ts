@@ -3,7 +3,6 @@ import type {
   AsrCloudProfile,
   AsrProfilesState,
   HistoryItem,
-  LocalAsrModelKey,
   ModelsConfig,
   SavedFile,
   SummaryProfile,
@@ -52,39 +51,26 @@ export const api = {
       config_path: '',
       raw: {
         model_root: 'models',
-        active_local_asr_model: 'qwen3_asr_1_7b',
         qwen3_asr_1_7b: { path: 'models/Qwen/Qwen3-ASR-1.7B', required: true, description: '' },
-        moss_transcribe_diarize: {
-          path: 'models/OpenMOSS-Team/MOSS-Transcribe-Diarize',
-          required: false,
-          description: ''
-        },
         pyannote_speaker_diarization: {
           path: 'models/pyannote/speaker-diarization-community-1',
           required: true,
           description: ''
         }
       },
-      active_local_asr_model: 'qwen3_asr_1_7b',
       qwen_path: '',
-      moss_path: '',
       pyannote_path: '',
       qwen_exists: false,
-      moss_exists: false,
       pyannote_exists: false
     })),
   saveModelPaths: (
     modelRoot: string,
-    activeLocalAsrModel: LocalAsrModelKey,
     qwenPath: string,
-    mossPath: string,
     pyannotePath: string
   ) =>
     invokeDesktop<ModelsConfig>('save_model_paths', {
       modelRoot,
-      activeLocalAsrModel,
       qwenPath,
-      mossPath,
       pyannotePath
     }),
   loadAsrProfiles: () =>

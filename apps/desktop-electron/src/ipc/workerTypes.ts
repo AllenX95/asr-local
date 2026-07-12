@@ -1,6 +1,5 @@
 export type ViewKey = 'workflow' | 'markdown' | 'history' | 'settings';
-export type LocalAsrModelKey = 'qwen3_asr_1_7b' | 'moss_transcribe_diarize';
-export type PipelineProfile = 'pyannote_qwen3_asr' | 'pyannote_moss_asr' | 'cloud_asr';
+export type PipelineProfile = 'pyannote_qwen3_asr' | 'cloud_asr';
 
 export interface AsrCloudProfile {
   id?: string;
@@ -50,17 +49,12 @@ export interface ModelsConfig {
   config_path: string;
   raw: {
     model_root: string;
-    active_local_asr_model: LocalAsrModelKey;
     qwen3_asr_1_7b: LocalModelConfig;
-    moss_transcribe_diarize: LocalModelConfig;
     pyannote_speaker_diarization: LocalModelConfig;
   };
-  active_local_asr_model: LocalAsrModelKey;
   qwen_path: string;
-  moss_path: string;
   pyannote_path: string;
   qwen_exists: boolean;
-  moss_exists: boolean;
   pyannote_exists: boolean;
 }
 

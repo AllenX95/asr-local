@@ -102,7 +102,7 @@ export class HostServices {
     const raw = await readToml(filePath, {})
     const legacyRoot = path.dirname(path.resolve(this.legacyConfigDir))
     let changed = false
-    for (const key of ['qwen3_asr_1_7b', 'moss_transcribe_diarize', 'pyannote_speaker_diarization']) {
+    for (const key of ['qwen3_asr_1_7b', 'pyannote_speaker_diarization']) {
       const configured = String(raw[key]?.path ?? '').trim()
       if (!configured || path.isAbsolute(configured)) continue
       const absolute = path.resolve(legacyRoot, configured)
@@ -156,27 +156,26 @@ export class HostServices {
   async loadModelsConfig(): Promise<JsonObject> {
     const configPath = path.join(this.configDir, 'models.toml')
     const defaults = {
-      model_root: 'models', active_local_asr_model: 'qwen3_asr_1_7b',
+      model_root: 'models',
       qwen3_asr_1_7b: defaultModel('models/Qwen/Qwen3-ASR-1.7B', true, 'Manual local path for the downloaded Qwen3-ASR-1.7B model directory.'),
-      moss_transcribe_diarize: defaultModel('models/OpenMOSS-Team/MOSS-Transcribe-Diarize', false, 'Manual local path for the downloaded MOSS-Transcribe-Diarize model directory.'),
       pyannote_speaker_diarization: defaultModel('models/pyannote/speaker-diarization-community-1', true, 'Manual local path for the downloaded pyannote speaker diarization model directory.'),
     }
-    const raw = { ...defaults, ...(await readToml(configPath, defaults)) }
-    const active = String(raw.active_local_asr_model || 'qwen3_asr_1_7b')
-    if (!['qwen3_asr_1_7b', 'moss_transcribe_diarize'].includes(active)) throw new Error(`unsupported active_local_asr_model: ${active}`)
+    const loaded = await readToml(configPath, defaults)
+    const raw = {
+      model_root: String(loaded.model_root ?? defaults.model_root),
+      qwen3_asr_1_7b: { ...defaults.qwen3_asr_1_7b, ...(loaded.qwen3_asr_1_7b ?? {}) },
+      pyannote_speaker_diarization: { ...defaults.pyannote_speaker_diarization, ...(loaded.pyannote_speaker_diarization ?? {}) },
+    }
     const resolveModel = (entry: JsonObject) => path.isAbsolute(entry.path) ? entry.path : path.join(this.projectRoot, entry.path)
     const qwenPath = resolveModel(raw.qwen3_asr_1_7b)
-    const mossPath = resolveModel(raw.moss_transcribe_diarize)
     const pyannotePath = resolveModel(raw.pyannote_speaker_diarization)
-    return { project_root: this.projectRoot, config_path: configPath, raw, active_local_asr_model: active, qwen_path: qwenPath, moss_path: mossPath, pyannote_path: pyannotePath, qwen_exists: existsSync(qwenPath), moss_exists: existsSync(mossPath), pyannote_exists: existsSync(pyannotePath) }
+    return { project_root: this.projectRoot, config_path: configPath, raw, qwen_path: qwenPath, pyannote_path: pyannotePath, qwen_exists: existsSync(qwenPath), pyannote_exists: existsSync(pyannotePath) }
   }
 
   async saveModelPaths(args: JsonObject): Promise<JsonObject> {
     const current = (await this.loadModelsConfig()).raw
     current.model_root = String(args.modelRoot ?? current.model_root).trim().replace(/\\/g, '/')
-    current.active_local_asr_model = String(args.activeLocalAsrModel ?? current.active_local_asr_model).trim()
     current.qwen3_asr_1_7b.path = String(args.qwenPath).trim().replace(/\\/g, '/')
-    current.moss_transcribe_diarize.path = String(args.mossPath).trim().replace(/\\/g, '/')
     current.pyannote_speaker_diarization.path = String(args.pyannotePath).trim().replace(/\\/g, '/')
     await writeToml(path.join(this.configDir, 'models.toml'), current)
     return this.loadModelsConfig()

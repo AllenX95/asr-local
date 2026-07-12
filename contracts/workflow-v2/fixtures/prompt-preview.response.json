@@ -4,5 +4,5 @@
   "kind": "response",
   "request_id": "req_prompt_001",
   "ok": true,
-  "result": { "compiler_id": "moss-prompt", "compiler_version": 1, "base_template_version": "openmoss-official-2026-07-09", "compiled_text": "MOSS official output format", "sha256": "hex-digest", "warnings": [] }
+  "result": { "compiler_id": "qwen-prompt", "compiler_version": 1, "base_template_version": "qwen-segment-v1", "compiled_text": "请准确转写音频内容，保留原意、专有名词和自然段落，不要添加音频中不存在的信息。", "sha256": "hex-digest", "warnings": [] }
 }

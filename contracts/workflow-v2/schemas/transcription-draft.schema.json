@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["pipeline_profile", "pipeline_profile_version", "device_policy", "language", "prompt_input", "postprocess", "cloud_profile"],
   "properties": {
-    "pipeline_profile": { "enum": ["pyannote_qwen3_asr", "pyannote_moss_asr", "cloud_asr"] },
+    "pipeline_profile": { "enum": ["pyannote_qwen3_asr", "cloud_asr"] },
     "pipeline_profile_version": { "type": "integer", "minimum": 1 },
     "device_policy": { "enum": ["auto", "cpu", "cuda"] },
     "audio": {
