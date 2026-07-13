@@ -46,4 +46,22 @@ describe('HostServices trusted workflow draft', () => {
 
     await expect(host.secretForProfile('summary', profile.id, profile.version)).resolves.toBe('secret')
   })
+
+  it('classifies the new transcript and summary folders and skips workflow staging files', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'asr-local-history-layout-'))
+    const outputs = path.join(root, 'outputs')
+    await mkdir(path.join(outputs, 'transcripts'), { recursive: true })
+    await mkdir(path.join(outputs, 'summary'), { recursive: true })
+    await mkdir(path.join(outputs, '.staging', 'wf_ignored'), { recursive: true })
+    await writeFile(path.join(outputs, 'transcripts', 'meeting--wf_1.md'), '# transcript')
+    await writeFile(path.join(outputs, 'summary', 'meeting--wf_1.md'), '# summary')
+    await writeFile(path.join(outputs, '.staging', 'wf_ignored', 'temporary.md'), '# temporary')
+
+    const host = new HostServices(root, path.join(root, 'config'), outputs)
+    const history = await host.history(100)
+
+    expect(history.filter((item) => item.kind === 'transcript')).toHaveLength(1)
+    expect(history.filter((item) => item.kind === 'summary')).toHaveLength(1)
+    expect(history.some((item) => item.title === 'temporary.md')).toBe(false)
+  })
 })

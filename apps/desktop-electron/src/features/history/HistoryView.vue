@@ -31,7 +31,7 @@ async function refreshAll(): Promise<void> {
     <header class="view-header">
       <div>
         <h1>历史</h1>
-        <p>扫描 outputs 目录中的转写稿、总结稿和最终稿。</p>
+        <p>扫描 outputs/transcripts 与 outputs/summary 中的转录稿和总结稿。</p>
       </div>
       <button type="button" @click="refreshAll">
         <RefreshCw :size="17" />

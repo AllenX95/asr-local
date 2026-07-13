@@ -26,7 +26,8 @@ if ($DataProfile -eq 'real') {
     $dataRoot = Join-Path $env:APPDATA 'ASR Local'
     $env:ASR_LOCAL_CONFIG_DIR = Join-Path $dataRoot 'config'
     $env:ASR_LOCAL_STATE_DIR = Join-Path $dataRoot 'workflow'
-    $env:ASR_LOCAL_OUTPUTS_DIR = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'ASR Local\outputs'
+    $env:ASR_LOCAL_OUTPUTS_DIR = Join-Path $projectRoot 'outputs'
+    $env:ASR_LOCAL_LEGACY_OUTPUTS_DIR = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'ASR Local\outputs'
     $env:ASR_LOCAL_LOG_DIR = Join-Path $dataRoot 'logs'
 } else {
     $dataRoot = Join-Path $projectRoot 'tmp\electron-debug'

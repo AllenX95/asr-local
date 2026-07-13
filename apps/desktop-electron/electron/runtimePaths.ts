@@ -45,7 +45,7 @@ export function resolveRuntimePaths(input: RuntimePathInput): RuntimePaths {
   } else if (input.isPackaged || profile === 'real') {
     configDir = path.join(input.userDataDir, 'config')
     stateDir = path.join(input.userDataDir, 'workflow')
-    outputsDir = path.join(input.documentsDir, 'ASR Local', 'outputs')
+    outputsDir = path.join(projectRoot, 'outputs')
     logsDir = path.join(input.userDataDir, 'logs')
   } else {
     configDir = path.join(projectRoot, 'config')

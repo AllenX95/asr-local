@@ -56,7 +56,7 @@ def run_job(payload: dict, emit=None, model_manager: ModelManager | None = None)
         LOGGER.error("source file missing | job_id=%s | source=%s", task.job_id, task.source_path)
         raise FileNotFoundError(f"Source file does not exist: {task.source_path}")
 
-    job_dir = project_root() / "outputs" / ".jobs" / task.job_id
+    job_dir = Path(str(payload.get("job_workspace_dir") or (project_root() / "outputs" / ".jobs" / task.job_id))).expanduser().resolve()
     job_dir.mkdir(parents=True, exist_ok=True)
     normalized_wav_path = job_dir / "normalized.wav"
 
@@ -266,6 +266,7 @@ def run_job(payload: dict, emit=None, model_manager: ModelManager | None = None)
     )
     cleanup_normalized_wav(task, normalized_wav_path)
     cleanup_job_cache(current_job_id=task.job_id)
+    cleanup_job_workspace(job_dir)
 
     return {
         **exported,
@@ -382,6 +383,15 @@ def delete_job_dir(job_dir: Path, reason: str) -> bool:
             exc,
         )
         return False
+
+
+def cleanup_job_workspace(job_dir: Path) -> None:
+    """Remove per-task intermediate files after a successful run."""
+
+    if env_flag(KEEP_NORMALIZED_WAV_ENV):
+        return
+    if job_dir.exists() and not delete_job_dir(job_dir, reason="workflow completed"):
+        LOGGER.warning("job workspace cleanup did not complete | path=%s", job_dir)
 
 
 def env_flag(name: str, default: bool = False) -> bool:

@@ -30,12 +30,15 @@ class ChunkedLocalTranscriber:
         workflow_id = str(spec.get("workflow_id", "workflow-v2"))
         manager = ModelManager()
         _validate_snapshot_paths(spec, manager)
-        staging_dir = Path(spec["output"]["directory"]) / ".staging" / f"chunked-{self.backend_id}-{attempt_id}"
+        output_root = Path(spec["output"]["directory"])
+        workflow_staging = output_root / ".staging" / workflow_id
+        staging_dir = workflow_staging / f"chunked-{self.backend_id}-{attempt_id}"
         payload = {
             "job_id": workflow_id,
             "source_path": spec["source"]["path"],
             "output_dir": str(staging_dir),
             "output_file_name": "transcript.md",
+            "job_workspace_dir": str(output_root / ".jobs" / workflow_id),
             "asr_backend": "local",
             "language_mode": spec["transcription"].get("language", {}).get("mode", "auto"),
             "fixed_language": spec["transcription"].get("language", {}).get("value"),

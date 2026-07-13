@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 from pathlib import Path
+import shutil
 from typing import Any, Awaitable, Callable, Protocol
 import uuid
 
@@ -14,6 +15,7 @@ from app.ipc.v2.canonical import canonical_operation_digest
 from app.ipc.v2.codec import normalize_workflow_draft
 
 from .registry import OperationConflictError, WorkflowNotFoundError, WorkflowRegistry
+from .output_layout import artifact_directory, artifact_path, safe_filename, workflow_jobs_dir, workflow_staging_dir
 from .runtime_plan import HardwareSnapshot, profile_hardware, resolve_runtime_plan
 from .model_snapshot import resolve_model_components
 from .state_machine import create_initial_snapshot, mark_interrupted, retry_snapshot
@@ -351,8 +353,11 @@ class WorkflowSupervisor:
             finally:
                 self._enqueued_workflows.discard(workflow_id)
                 try:
-                    final_status = self.registry.get_snapshot(workflow_id).get("status")
+                    final_snapshot = self.registry.get_snapshot(workflow_id)
+                    final_status = final_snapshot.get("status")
                     if final_status in {"completed", "completed_with_warnings", "failed", "cancelled", "interrupted"}:
+                        if final_status in {"completed", "completed_with_warnings", "cancelled"}:
+                            _cleanup_workflow_workspace(final_snapshot)
                         self._control_events.pop(workflow_id, None)
                 except WorkflowNotFoundError:
                     self._control_events.pop(workflow_id, None)
@@ -453,9 +458,9 @@ class WorkflowSupervisor:
 
         summary_base = self.registry.get_snapshot(running["workflow_id"])
         if retry_stage == "writing_final":
-            checkpoint = _select_checkpoint_artifact(summary_base)
+            checkpoint = _select_summary_input_artifact(summary_base)
             if checkpoint is None:
-                raise ValueError("SUMMARY_CHECKPOINT_MISSING: final-write retry has no summary checkpoint")
+                raise ValueError("SUMMARY_CHECKPOINT_MISSING: final-write retry has no readable summary artifact")
             summary = _transition(summary_base, status="running", stage="writing_final", clock=self.clock())
             summary["attempt"]["stage_attempts"]["writing_final"] += 1
         else:
@@ -466,7 +471,7 @@ class WorkflowSupervisor:
         self.registry.save_snapshot(summary, event)
         await self._publish(event)
         if retry_stage == "writing_final":
-            summary_result = _read_summary_checkpoint(checkpoint)
+            summary_result = _read_summary_artifact(checkpoint)
         else:
             summary_result = await self.summary_generator.summarize(execution_spec, transcript_artifact, summary["attempt"]["attempt_id"])
         if not await self._wait_for_control(snapshot["workflow_id"]):
@@ -615,11 +620,11 @@ def build_spec(draft: dict[str, Any], *, workflow_id: str) -> dict[str, Any]:
     output_root = Path(output["directory"]).expanduser().resolve()
     base_output = output_root / output["base_name"]
     if output["collision_policy"] == "reject":
-        if base_output.exists():
+        base_stem = safe_filename(str(output["base_name"]))
+        existing_final = any(any((output_root / folder).glob(f"{base_stem}--*.md")) for folder in ("transcripts", "summary"))
+        if base_output.exists() or existing_final:
             raise ValueError(f"OUTPUT_CONFLICT: output already exists: {base_output}")
-        output["directory"] = str(base_output)
-    else:
-        output["directory"] = str(output_root / f"{output['base_name']}--{workflow_id}")
+    output["directory"] = str(output_root)
     return {
         "spec_version": 2,
         "display_name": draft["display_name"],
@@ -702,14 +707,16 @@ def _select_checkpoint_artifact(snapshot: dict[str, Any]) -> dict[str, Any] | No
     return candidates[0] if candidates else None
 
 
-def _read_summary_checkpoint(artifact: dict[str, Any]) -> dict[str, Any]:
+def _read_summary_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
     path = Path(str(artifact.get("path", "")))
     if not path.is_file():
-        raise ValueError("SUMMARY_CHECKPOINT_MISSING: checkpoint file is not readable")
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict) or not isinstance(payload.get("text"), str):
-        raise ValueError("SUMMARY_CHECKPOINT_INVALID: checkpoint does not contain summary text")
-    return {"kind": "final_summary_markdown", "text": payload["text"]}
+        raise ValueError("SUMMARY_CHECKPOINT_MISSING: summary artifact is not readable")
+    if artifact.get("kind") == "summary_checkpoint_json":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or not isinstance(payload.get("text"), str):
+            raise ValueError("SUMMARY_CHECKPOINT_INVALID: checkpoint does not contain summary text")
+        return {"kind": "final_summary_markdown", "text": payload["text"]}
+    return {"kind": "final_summary_markdown", "text": path.read_text(encoding="utf-8")}
 
 
 def _summary_checkpoint_result(result: dict[str, Any]) -> dict[str, Any]:
@@ -779,34 +786,17 @@ def _add_artifact(
 def _materialize_artifact(snapshot: dict[str, Any], result: dict[str, Any], *, kind: str, revision: int) -> tuple[str, str]:
     text = str(result.get("text", ""))
     existing_path = Path(str(result.get("path", ""))) if result.get("path") else None
-    registered_paths = {str(item.get("path")) for item in snapshot.get("artifacts", [])}
-    if existing_path and existing_path.is_file() and str(existing_path) not in registered_paths:
+    if not text and existing_path and existing_path.is_file():
         try:
             text = existing_path.read_text(encoding="utf-8")
         except OSError:
             pass
-        return str(existing_path), text
-    output_dir = Path(snapshot["spec"]["output"]["directory"])
-    output_dir.mkdir(parents=True, exist_ok=True)
-    filename = _artifact_filename(kind, revision)
-    output_path = output_dir / filename
+    output_path = artifact_path(snapshot, kind, revision)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = output_path.with_suffix(output_path.suffix + ".tmp")
     temp_path.write_text(text, encoding="utf-8")
     temp_path.replace(output_path)
     return str(output_path), text
-
-
-def _artifact_filename(kind: str, revision: int) -> str:
-    stem_by_kind = {
-        "transcript_markdown": "transcript",
-        "transcript_json": "transcript",
-        "summary_checkpoint_json": "summary-checkpoint",
-        "final_summary_markdown": "final-summary",
-        "final_summary_json": "final-summary",
-    }
-    suffix = "json" if kind.endswith("_json") else "md"
-    stem = stem_by_kind.get(kind, kind.replace("_", "-"))
-    return f"{stem}.{suffix}" if revision == 1 else f"{stem}-r{revision}.{suffix}"
 
 
 def _ensure_source_unchanged(source: dict[str, Any]) -> None:
@@ -844,10 +834,49 @@ def _validate_and_promote_staged_artifact(
         raise ValueError("INVALID_REQUEST: staged artifact size does not match")
     if _sha256_file(candidate) != expected_sha256:
         raise ValueError("INVALID_REQUEST: staged artifact digest does not match")
-    output_root.mkdir(parents=True, exist_ok=True)
-    promoted = output_root / f"{kind}-r{revision}.md"
+    promoted_root = artifact_directory(output_root, kind)
+    if promoted_root is None:
+        raise ValueError("INVALID_REQUEST: unsupported artifact kind")
+    promoted_root.mkdir(parents=True, exist_ok=True)
+    promoted = artifact_path(snapshot, kind, revision)
     candidate.replace(promoted)
+    for directory in (candidate.parent, staging_root):
+        try:
+            directory.rmdir()
+        except OSError:
+            break
     return promoted
+
+
+def _select_summary_input_artifact(snapshot: dict[str, Any]) -> dict[str, Any] | None:
+    checkpoint = _select_checkpoint_artifact(snapshot)
+    if checkpoint is not None and Path(str(checkpoint.get("path", ""))).is_file():
+        return checkpoint
+    candidates = [
+        item
+        for item in snapshot.get("artifacts", [])
+        if item.get("kind") == "final_summary_markdown" and not item.get("stale")
+    ]
+    candidates.sort(key=lambda item: (int(item.get("revision", 0)), str(item.get("created_at", ""))), reverse=True)
+    for candidate in candidates:
+        if Path(str(candidate.get("path", ""))).is_file():
+            return candidate
+    return None
+
+
+def _cleanup_workflow_workspace(snapshot: dict[str, Any]) -> None:
+    output_root = Path(str(snapshot.get("spec", {}).get("output", {}).get("directory", ""))).expanduser().resolve()
+    workflow_id = str(snapshot.get("workflow_id", ""))
+    if not workflow_id:
+        return
+    for directory in (workflow_staging_dir(output_root, workflow_id), workflow_jobs_dir(output_root, workflow_id)):
+        if not directory.exists():
+            continue
+        try:
+            shutil.rmtree(directory)
+        except OSError:
+            # Cleanup must never turn a completed workflow into a failure.
+            continue
 
 
 def _apply_control(snapshot: dict[str, Any], action: str, clock: str) -> dict[str, Any]:

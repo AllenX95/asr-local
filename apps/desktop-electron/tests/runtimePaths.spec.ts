@@ -19,7 +19,7 @@ describe('resolveRuntimePaths', () => {
     })
     expect(result.configDir).toBe(path.normalize('C:/Users/test/AppData/Roaming/ASR Local/config'))
     expect(result.stateDir).toBe(path.normalize('C:/Users/test/AppData/Roaming/ASR Local/workflow'))
-    expect(result.outputsDir).toBe(path.normalize('C:/Users/test/Documents/ASR Local/outputs'))
+    expect(result.outputsDir).toBe(path.normalize('E:/repo/outputs'))
     expect(result.logsDir).toBe(path.normalize('C:/Users/test/AppData/Roaming/ASR Local/logs'))
   })
 

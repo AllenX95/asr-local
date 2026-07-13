@@ -297,12 +297,37 @@ export class HostServices {
   }
 
   async history(limitInput: unknown): Promise<JsonObject[]> {
-    const limit = limitInput == null ? 100 : Number(limitInput); if (!Number.isInteger(limit) || limit < 0) throw new Error('limit must be a non-negative integer')
-    const roots = [this.outputsRoot, this.legacyOutputsRoot].filter((root): root is string => Boolean(root && existsSync(root)))
+    const limit = limitInput == null ? 100 : Number(limitInput)
+    if (!Number.isInteger(limit) || limit < 0) throw new Error('limit must be a non-negative integer')
+    const roots = [this.outputsRoot, this.legacyOutputsRoot]
+      .filter((root): root is string => Boolean(root && existsSync(root)))
+      .map((root) => path.resolve(root))
     if (!roots.length) return []
-    const items: JsonObject[] = []; const skipped = new Set(['.jobs', 'logs', 'webview2-data', 'node_modules', 'target'])
-    const walk = async (directory: string): Promise<void> => { for (const entry of await readdir(directory, { withFileTypes: true })) { if (entry.isDirectory()) { if (!skipped.has(entry.name) && !entry.name.startsWith('cargo-target-')) await walk(path.join(directory, entry.name)); continue } if (!entry.isFile() || path.extname(entry.name) !== '.md') continue; const filePath = path.join(directory, entry.name); const info = await stat(filePath); const suffix = entry.name.endsWith('.summary.md') ? '.summary.md' : entry.name.endsWith('.draft.md') ? '.draft.md' : entry.name.endsWith('.transcript.md') ? '.transcript.md' : ''; const kind = suffix === '.summary.md' ? 'summary' : suffix === '.draft.md' ? 'draft' : suffix === '.transcript.md' ? 'transcript' : 'markdown'; const companion = kind === 'summary' || kind === 'transcript' ? filePath.slice(0, -3) + '.json' : null; items.push({ id: filePath, kind, title: entry.name, path: filePath, companion_json_path: companion && existsSync(companion) ? companion : null, modified_ms: info.mtimeMs, size_bytes: info.size }) } }
-    for (const root of roots) await walk(root)
+
+    const items: JsonObject[] = []
+    const skipped = new Set(['.jobs', '.staging', 'logs', 'webview2-data', 'node_modules', 'target'])
+    const walk = async (root: string, directory: string): Promise<void> => {
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        if (entry.isDirectory()) {
+          if (!skipped.has(entry.name) && !entry.name.startsWith('cargo-target-')) await walk(root, path.join(directory, entry.name))
+          continue
+        }
+        if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== '.md') continue
+        const filePath = path.join(directory, entry.name)
+        const info = await stat(filePath)
+        const relativeParts = path.relative(root, filePath).split(path.sep)
+        const category = relativeParts.length > 1 ? relativeParts[relativeParts.length - 2] : ''
+        const suffix = entry.name.endsWith('.summary.md') ? '.summary.md' : entry.name.endsWith('.draft.md') ? '.draft.md' : entry.name.endsWith('.transcript.md') ? '.transcript.md' : ''
+        const kind = category === 'summary' || suffix === '.summary.md'
+          ? 'summary'
+          : category === 'transcripts' || suffix === '.transcript.md'
+            ? 'transcript'
+            : suffix === '.draft.md' ? 'draft' : 'markdown'
+        const companion = kind === 'summary' || kind === 'transcript' ? filePath.slice(0, -3) + '.json' : null
+        items.push({ id: filePath, kind, title: entry.name, path: filePath, companion_json_path: companion && existsSync(companion) ? companion : null, modified_ms: info.mtimeMs, size_bytes: info.size })
+      }
+    }
+    for (const root of roots) await walk(root, root)
     const unique = new Map(items.map((item) => [item.path, item]))
     return [...unique.values()].sort((a, b) => b.modified_ms - a.modified_ms).slice(0, limit)
   }

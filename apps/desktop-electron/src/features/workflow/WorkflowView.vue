@@ -282,10 +282,11 @@ async function editArtifact(artifactId: string): Promise<void> {
   }
 }
 
-function stagingPath(path: string): string {
+function stagingPath(path: string, workflowId: string): string {
   const slash = Math.max(path.lastIndexOf('\\'), path.lastIndexOf('/'));
   const directory = slash >= 0 ? path.slice(0, slash) : '.';
-  return `${directory}/.staging/edit-${crypto.randomUUID()}.md`;
+  const outputRoot = directory.replace(/[\\/](?:transcripts|summary)$/u, '');
+  return `${outputRoot}/.staging/${workflowId}/edit-${crypto.randomUUID()}.md`;
 }
 
 async function saveArtifactRevision(): Promise<void> {
@@ -295,7 +296,7 @@ async function saveArtifactRevision(): Promise<void> {
   artifactSaving.value = true;
   artifactError.value = '';
   try {
-    const stagedPath = stagingPath(artifact.path);
+    const stagedPath = stagingPath(artifact.path, snapshot.workflow_id);
     await api.saveTextFile(stagedPath, artifactText.value);
     const digestBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(artifactText.value));
     const digest = Array.from(new Uint8Array(digestBuffer)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -328,6 +329,10 @@ function statusLabel(snapshot: WorkflowSnapshot): string {
   if (snapshot.stage === 'summarizing') return '总结中';
   if (snapshot.stage === 'writing_final') return '写入文件';
   return snapshot.status === 'queued' ? '排队中' : '准备中';
+}
+
+function visibleArtifacts(snapshot: WorkflowSnapshot) {
+  return snapshot.artifacts.filter((artifact) => ['transcript_markdown', 'final_summary_markdown'].includes(artifact.kind));
 }
 
 function ratio(value: number | null | undefined): number | null {
@@ -577,8 +582,8 @@ function phaseLabel(value: string | null | undefined): string {
                   <span>产物与诊断信息</span><ChevronDown v-if="diagnosticsExpanded" :size="15" /><ChevronRight v-else :size="15" />
                 </button>
                 <div v-if="diagnosticsExpanded" class="diagnostics-content">
-                  <div v-if="snapshot.artifacts.length" class="artifact-list">
-                    <div v-for="artifact in snapshot.artifacts" :key="artifact.artifact_id">
+                  <div v-if="visibleArtifacts(snapshot).length" class="artifact-list">
+                    <div v-for="artifact in visibleArtifacts(snapshot)" :key="artifact.artifact_id">
                       <strong>{{ artifact.kind }}</strong><span>{{ artifact.path }}{{ artifact.stale ? ' · 已过期' : '' }}</span><button type="button" @click="editArtifact(artifact.artifact_id)">编辑</button>
                     </div>
                   </div>

@@ -300,6 +300,9 @@ class SupervisorTests(unittest.TestCase):
                 paths = {item["kind"]: Path(item["path"]) for item in current["artifacts"]}
                 self.assertTrue(paths["transcript_markdown"].is_file())
                 self.assertTrue(paths["final_summary_markdown"].is_file())
+                self.assertEqual(paths["transcript_markdown"].parent.name, "transcripts")
+                self.assertEqual(paths["final_summary_markdown"].parent.name, "summary")
+                self.assertFalse((Path(spec["output"]["directory"]) / ".staging" / current["workflow_id"]).exists())
                 self.assertEqual(paths["final_summary_markdown"].read_text(encoding="utf-8"), "fake summary")
                 await supervisor.shutdown(interrupt=False)
                 registry.close()
@@ -486,13 +489,19 @@ class SupervisorTests(unittest.TestCase):
                 await supervisor._queue.join()
                 completed = await supervisor.get(workflow_id)
                 artifact_paths = [Path(item["path"]) for item in completed["artifacts"]]
-                self.assertTrue(all(path.is_file() for path in artifact_paths))
+                persisted_artifacts = [
+                    item for item in completed["artifacts"]
+                    if item["kind"] != "summary_checkpoint_json"
+                ]
+                self.assertTrue(all(Path(item["path"]).is_file() for item in persisted_artifacts))
+                checkpoint = next(item for item in completed["artifacts"] if item["kind"] == "summary_checkpoint_json")
+                self.assertFalse(Path(checkpoint["path"]).exists())
                 result = await supervisor.clear({"workflow_id": workflow_id}, operation_id="op_clear_done")
                 self.assertTrue(result["cleared"])
                 self.assertEqual(await supervisor.list(), [])
                 with self.assertRaises(KeyError):
                     await supervisor.get(workflow_id)
-                self.assertTrue(all(path.is_file() for path in artifact_paths))
+                self.assertTrue(all(path.is_file() for path in artifact_paths if path != Path(checkpoint["path"])))
                 await supervisor.shutdown(interrupt=False)
                 registry.close()
 
