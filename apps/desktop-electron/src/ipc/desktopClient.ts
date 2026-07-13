@@ -79,7 +79,7 @@ export const api = {
       last_profile: null
     })),
   saveAsrProfile: (profile: AsrCloudProfile) =>
-    invokeDesktop<AsrProfilesState>('save_asr_profile', { profile }),
+    invokeDesktop<AsrProfilesState>('save_asr_profile', { profile: { ...profile } }),
   deleteAsrProfile: (name: string) =>
     invokeDesktop<AsrProfilesState>('delete_asr_profile', { name }),
   workerHealthCheck: () => invokeDesktop<Record<string, unknown>>('worker_health_check'),
@@ -89,7 +89,7 @@ export const api = {
       last_profile: null
     })),
   saveSummaryProfile: (profile: SummaryProfile) =>
-    invokeDesktop<SummaryProfilesState>('save_summary_profile', { profile }),
+    invokeDesktop<SummaryProfilesState>('save_summary_profile', { profile: { ...profile } }),
   deleteSummaryProfile: (name: string) =>
     invokeDesktop<SummaryProfilesState>('delete_summary_profile', { name }),
   loadSummaryTemplates: () => invokeDesktop<SummaryTemplate[]>('load_summary_templates', undefined, () => []),
