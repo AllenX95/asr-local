@@ -5,6 +5,7 @@ import { api } from '../../ipc/desktopClient';
 import type { PipelineProfile, WorkflowCatalogs, WorkflowSummaryProfile, WorkflowSummaryTemplate } from '../../ipc/workerTypes';
 import { useAppStore } from '../../stores/appStore';
 import { useWorkflowStore } from '../../stores/workflowStore';
+import { taskControlActions } from '../../workflows/taskControls';
 import type { WorkflowDraft, WorkflowSnapshot } from '../../workflows/types';
 
 const appStore = useAppStore();
@@ -22,6 +23,7 @@ const selectedProfileName = ref('');
 const selectedTemplateName = ref('');
 const privacyConfirmed = ref(false);
 const error = ref('');
+const controlErrors = ref<Record<string, string>>({});
 const submitting = ref(false);
 const catalogs = ref<WorkflowCatalogs>({ summary_profiles: [], summary_templates: [] });
 const editingArtifactId = ref<string | null>(null);
@@ -203,15 +205,15 @@ async function submit(): Promise<void> {
 }
 
 function canPause(snapshot: WorkflowSnapshot): boolean {
-  return snapshot.status === 'running';
+  return taskControlActions(snapshot.status).includes('pause');
 }
 
 function canResume(snapshot: WorkflowSnapshot): boolean {
-  return snapshot.status === 'paused';
+  return taskControlActions(snapshot.status).includes('resume');
 }
 
 function canCancel(snapshot: WorkflowSnapshot): boolean {
-  return snapshot.status === 'queued' || snapshot.status === 'running' || snapshot.status === 'paused';
+  return taskControlActions(snapshot.status).includes('cancel');
 }
 
 async function control(action: 'pause' | 'resume' | 'cancel'): Promise<void> {
@@ -219,8 +221,9 @@ async function control(action: 'pause' | 'resume' | 'cancel'): Promise<void> {
   if (!snapshot) return;
   try {
     await workflowStore.control(snapshot.workflow_id, snapshot.attempt.attempt_id, action);
+    delete controlErrors.value[snapshot.workflow_id];
   } catch (reason) {
-    error.value = String(reason);
+    controlErrors.value[snapshot.workflow_id] = String(reason);
   }
 }
 
@@ -234,6 +237,7 @@ async function retry(): Promise<void> {
       snapshot.sequence,
       snapshot.recovery.recommended_retry_stage === 'summarizing' ? 'summarizing' : 'auto',
     );
+    delete controlErrors.value[snapshot.workflow_id];
   } catch (reason) {
     error.value = String(reason);
   }
@@ -541,6 +545,7 @@ function phaseLabel(value: string | null | undefined): string {
                 <div><dt>更新时间</dt><dd><Clock3 :size="14" />{{ updatedAt(snapshot) }}</dd></div>
               </dl>
               <p v-if="snapshot.last_error" class="workflow-error">{{ snapshot.last_error.message }}</p>
+              <p v-if="controlErrors[snapshot.workflow_id]" class="workflow-error">{{ controlErrors[snapshot.workflow_id] }}</p>
               <div class="workflow-actions">
                 <button v-if="canPause(snapshot)" type="button" :disabled="Boolean(snapshot.control.pending_action)" @click="control('pause')"><Pause :size="15" />{{ snapshot.control.pending_action === 'pause' ? '暂停中' : '暂停' }}</button>
                 <button v-if="canResume(snapshot)" type="button" :disabled="Boolean(snapshot.control.pending_action)" @click="control('resume')"><Play :size="15" />继续</button>

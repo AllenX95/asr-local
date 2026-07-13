@@ -7,7 +7,7 @@ import unittest
 
 from app.workflow.registry import WorkflowRegistry
 from app.workflow.state_machine import create_initial_snapshot
-from app.workflow.supervisor import FakeSummaryGenerator, FakeTranscriber, WorkflowSupervisor, build_spec
+from app.workflow.supervisor import FakeSummaryGenerator, FakeTranscriber, WorkflowSupervisor, _apply_control, build_spec
 
 
 class SelectiveFailTranscriber:
@@ -83,6 +83,18 @@ def make_draft(source: Path, name: str = "sample") -> dict:
 
 
 class SupervisorTests(unittest.TestCase):
+    def test_waiting_for_secret_can_be_cancelled(self) -> None:
+        snapshot = {
+            "status": "waiting_for_secret",
+            "control": {"pending_action": None},
+            "sequence": 10,
+            "timestamps": {"updated_at": "before"},
+        }
+        cancelled = _apply_control(snapshot, "cancel", "after")
+        self.assertEqual(cancelled["status"], "cancelled")
+        self.assertIsNone(cancelled["control"]["pending_action"])
+        self.assertEqual(cancelled["sequence"], 11)
+
     def test_transcription_heartbeat_persists_truthful_progress(self) -> None:
         async def scenario() -> None:
             with tempfile.TemporaryDirectory() as temp:

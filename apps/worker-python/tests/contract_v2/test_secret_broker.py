@@ -63,6 +63,30 @@ class SecretBrokerTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_stdio_bridge_can_cancel_a_pending_attempt(self) -> None:
+        async def scenario() -> None:
+            provider = BrokerSecretProvider()
+            requested = asyncio.Event()
+
+            async def on_request(_data: dict) -> None:
+                requested.set()
+
+            provider.on_request = on_request
+            profile = {
+                "profile_id": "profile-1",
+                "profile_version": 1,
+                "credential_ref": "credential://summary/profile-1",
+                "provider_binding_sha256": "binding",
+                "auth_mode": "bearer",
+            }
+            task = asyncio.create_task(provider.provide(workflow_id="wf-1", attempt_id="att-1", profile=profile, purpose="summary_api"))
+            await requested.wait()
+            self.assertTrue(provider.cancel_attempt("wf-1", "att-1"))
+            with self.assertRaises(CredentialError):
+                await task
+
+        asyncio.run(scenario())
+
 
 if __name__ == "__main__":
     unittest.main()

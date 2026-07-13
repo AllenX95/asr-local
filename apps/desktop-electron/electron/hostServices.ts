@@ -5,9 +5,11 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
 
 const require = createRequire(import.meta.url)
-const TOML = require('./vendor/toml/toml.js') as typeof import('@iarna/toml')
+const vendorTomlPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'vendor', 'toml', 'toml.js')
+const TOML = (existsSync(vendorTomlPath) ? require(vendorTomlPath) : require('@iarna/toml')) as typeof import('@iarna/toml')
 
 type JsonObject = Record<string, any>
 const defaultModel = (modelPath: string, required: boolean, description: string) => ({ path: modelPath, required, description })

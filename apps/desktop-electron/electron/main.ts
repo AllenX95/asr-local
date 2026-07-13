@@ -8,6 +8,7 @@ import { WorkflowRuntimeClient } from './workflowRuntimeClient.js'
 import { HostServices } from './hostServices.js'
 import { resolveRuntimePaths } from './runtimePaths.js'
 import { createSessionLogger } from './sessionLogger.js'
+import { buildSecretProvideParams } from './credentialGrant.js'
 
 const appDir = path.dirname(fileURLToPath(import.meta.url))
 const userDataDir = app.getPath('userData')
@@ -145,13 +146,17 @@ ipcMain.handle(DESKTOP_INVOKE_CHANNEL, async (event, command: unknown, args: unk
 runtime.on('workflow-event', (payload: any) => {
   mainWindow?.webContents.send(WORKFLOW_EVENT_CHANNEL, payload)
   if (payload?.type !== 'credentials_required' || !payload?.data) return
-  void host.credentialGrant(payload.data).then(({ secret }) => runtime.request('secret.provide', {
-    ...payload.data,
-    workflow_id: payload.workflow_id,
-    expected_attempt_id: payload.attempt_id,
-    secret,
-    lease_scope: 'attempt',
-  })).catch((error) => console.error('Credential grant rejected:', error))
+  void host.credentialGrant(payload.data)
+    .then(({ secret }) => runtime.request('secret.provide', buildSecretProvideParams(payload, secret)))
+    .catch((error) => {
+      logger.error('Credential grant rejected', {
+        workflowId: String(payload.workflow_id ?? ''),
+        attemptId: String(payload.attempt_id ?? ''),
+        secretRequestId: String(payload.data.secret_request_id ?? ''),
+        message: String(error),
+      })
+      console.error('Credential grant rejected:', error)
+    })
 })
 runtime.on('protocol-error', (error) => { logger.error('Workflow protocol error', { message: String(error) }); console.error(error) })
 runtime.on('error', (error) => { logger.error('Workflow runtime error', { message: String(error) }); console.error(error) })

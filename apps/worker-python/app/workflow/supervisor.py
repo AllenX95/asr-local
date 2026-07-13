@@ -342,6 +342,8 @@ class WorkflowSupervisor:
                 continue
             except Exception as exc:
                 snapshot = self.registry.get_snapshot(workflow_id)
+                if snapshot.get("status") in {"completed", "completed_with_warnings", "failed", "cancelled", "interrupted"}:
+                    continue
                 failed = _failed_snapshot(snapshot, exc, self.clock())
                 event = self._event(failed, "failed", data={"error": str(exc)})
                 self.registry.save_snapshot(failed, event)
@@ -851,6 +853,9 @@ def _validate_and_promote_staged_artifact(
 def _apply_control(snapshot: dict[str, Any], action: str, clock: str) -> dict[str, Any]:
     result = json.loads(json.dumps(snapshot))
     if action == "cancel" and result["status"] == "queued":
+        result["status"] = "cancelled"
+        result["control"]["pending_action"] = None
+    elif action == "cancel" and result["status"] == "waiting_for_secret":
         result["status"] = "cancelled"
         result["control"]["pending_action"] = None
     elif action == "cancel" and result["status"] in {"running", "paused"}:

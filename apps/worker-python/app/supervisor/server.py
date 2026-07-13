@@ -12,7 +12,7 @@ from app.ipc.v2 import ProtocolError, decode_request, encode_event, encode_respo
 from app.config import project_root, state_dir
 from app.workflow.registry import WorkflowRegistry
 from app.workflow.supervisor import WorkflowSupervisor
-from app.workflow.secrets import EphemeralSecretBroker, SecretRequest
+from app.workflow.secrets import CredentialError, EphemeralSecretBroker, SecretRequest
 
 
 LOGGER = logging.getLogger("asr_local.worker.runtime")
@@ -26,18 +26,33 @@ class BrokerSecretProvider:
         self.on_request = None
         self.on_granted = None
         self._pending: dict[str, asyncio.Future[str]] = {}
+        self._pending_attempts: dict[str, tuple[str, str]] = {}
 
     async def provide(self, *, workflow_id: str, attempt_id: str, profile: dict[str, Any], purpose: str) -> str:
         request = self.broker.request(workflow_id=workflow_id, attempt_id=attempt_id, profile=profile, purpose=purpose)
         future = asyncio.get_running_loop().create_future()
         self._pending[request.secret_request_id] = future
+        self._pending_attempts[request.secret_request_id] = (workflow_id, attempt_id)
         if self.on_request is not None:
             await self.on_request({**request.as_event_data(), "workflow_id": request.workflow_id, "attempt_id": request.attempt_id})
         try:
             return await future
         finally:
             self._pending.pop(request.secret_request_id, None)
+            self._pending_attempts.pop(request.secret_request_id, None)
             self.broker.revoke(request.secret_request_id)
+
+    def cancel_attempt(self, workflow_id: str, attempt_id: str) -> bool:
+        cancelled = False
+        for request_id, identity in list(self._pending_attempts.items()):
+            if identity != (workflow_id, attempt_id):
+                continue
+            future = self._pending.get(request_id)
+            if future is not None and not future.done():
+                future.set_exception(CredentialError("secret request cancelled"))
+                cancelled = True
+            self.broker.revoke(request_id)
+        return cancelled
 
     async def grant(self, params: dict[str, Any]) -> dict[str, Any]:
         if params.get("lease_scope") != "attempt":
@@ -216,7 +231,11 @@ class V2StdioServer:
         if method == "workflow.clear":
             return await self.supervisor.clear(params, operation_id=message["operation_id"])
         if method == "workflow.control":
-            return await self.supervisor.control(params, operation_id=message["operation_id"])
+            before = await self.supervisor.get(params["workflow_id"])
+            result = await self.supervisor.control(params, operation_id=message["operation_id"])
+            if params["action"] == "cancel" and before["status"] == "waiting_for_secret":
+                self.secret_provider.cancel_attempt(params["workflow_id"], params["expected_attempt_id"])
+            return result
         if method == "workflow.retry":
             return await self.supervisor.retry(params, operation_id=message["operation_id"])
         if method == "artifact.register_revision":
