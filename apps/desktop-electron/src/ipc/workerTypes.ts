@@ -71,6 +71,8 @@ export interface SummaryProfile {
   base_url: string;
   model: string;
   api_key: string;
+  max_input_tokens: number;
+  max_output_tokens: number;
 }
 
 export interface SummaryProfilesState {
@@ -91,6 +93,8 @@ export interface WorkflowSummaryProfile {
   name: string;
   base_url: string;
   model: string;
+  max_input_tokens: number;
+  max_output_tokens: number;
   auth_mode: 'none' | 'bearer';
   provider_binding_sha256: string;
 }

@@ -17,7 +17,9 @@ const profileDraft = reactive<SummaryProfile>({
   name: '',
   base_url: '',
   model: '',
-  api_key: ''
+  api_key: '',
+  max_input_tokens: 8000,
+  max_output_tokens: 2000,
 });
 
 const asrProfileDraft = reactive<AsrCloudProfile>({
@@ -217,6 +219,14 @@ const healthRows = computed(() =>
         <label>
           <span>Model</span>
           <input v-model="profileDraft.model" type="text" />
+        </label>
+        <label>
+          <span>Max Input Tokens</span>
+          <input v-model.number="profileDraft.max_input_tokens" type="number" min="1" step="1" />
+        </label>
+        <label>
+          <span>Max Output Tokens</span>
+          <input v-model.number="profileDraft.max_output_tokens" type="number" min="1" step="1" />
         </label>
         <label>
           <span>API Key</span>

@@ -7,6 +7,7 @@ import { useAppStore } from '../../stores/appStore';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { taskControlActions } from '../../workflows/taskControls';
 import type { WorkflowDraft, WorkflowSnapshot } from '../../workflows/types';
+import { nextBaseNameForAudioSelection } from './workflowNaming';
 
 const appStore = useAppStore();
 const workflowStore = useWorkflowStore();
@@ -47,6 +48,8 @@ const availableProfiles = computed<WorkflowSummaryProfile[]>(() => {
     name: profile.name,
     base_url: profile.base_url,
     model: profile.model,
+    max_input_tokens: profile.max_input_tokens,
+    max_output_tokens: profile.max_output_tokens,
     auth_mode: profile.api_key.trim() ? 'bearer' : 'none',
     provider_binding_sha256: `catalog:${profile.id}:v${profile.version}`,
   }));
@@ -111,16 +114,11 @@ function parseHotwords(): string[] {
     .filter(Boolean);
 }
 
-function parseBaseName(path: string): string {
-  const file = path.split(/[\\/]/u).pop() || 'meeting';
-  return file.replace(/\.[^.]+$/u, '') || 'meeting';
-}
-
 async function chooseAudio(): Promise<void> {
   const selected = await api.selectAudioFile();
   if (selected) {
+    baseName.value = nextBaseNameForAudioSelection(baseName.value, sourcePath.value, selected);
     sourcePath.value = selected;
-    if (baseName.value === 'meeting') baseName.value = parseBaseName(selected);
   }
 }
 
@@ -173,8 +171,8 @@ function buildDraft(): WorkflowDraft {
         prompt_snapshot: template.prompt,
       },
       context_strategy: 'auto',
-      input_token_budget: 8000,
-      max_output_tokens: 2000,
+      input_token_budget: profile.max_input_tokens,
+      max_output_tokens: profile.max_output_tokens,
     },
     output: {
       directory: outputDir.value.trim() || 'outputs',

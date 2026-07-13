@@ -19,7 +19,7 @@ def spec(strategy: str, budget: int = 1000, auth_mode: str = "none") -> dict:
             "template": {"prompt_snapshot": "Return concise Markdown."},
             "context_strategy": strategy,
             "input_token_budget": budget,
-            "max_output_tokens": 100,
+            "max_output_tokens": 321,
         },
     }
 
@@ -38,6 +38,7 @@ class SummaryAdapterTests(unittest.TestCase):
             self.assertEqual(result["strategy"], "single_pass")
             self.assertEqual(len(calls), 1)
             self.assertNotIn("Authorization", calls[0][2])
+            self.assertEqual(calls[0][1]["max_tokens"], 321)
 
         asyncio.run(scenario())
 

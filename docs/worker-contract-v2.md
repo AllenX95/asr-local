@@ -352,6 +352,7 @@ Response：
 | `summary.template.prompt_snapshot` | 必填，最多 32000 字符 |
 | `summary.context_strategy` | `auto`、`single_pass` 或 `hierarchical` |
 | `input_token_budget` | 正整数，由 Summary Profile 默认并可在能力范围内覆盖 |
+| `summary.max_output_tokens` | 正整数，由 Summary Profile 的 `max_output_tokens` 默认 |
 | `output.directory` | 必须可创建或可写 |
 | `collision_policy` | `reject` 或 `unique_suffix`；v2 不允许静默覆盖 |
 
@@ -454,7 +455,7 @@ supervisor 接受任务时生成并持久化：
 - Snapshot 不含 secret。
 - Prompt 与模板保存正文、版本和 digest，用于复现。
 - 本地 pipeline 的 `model_snapshot.components` 保存稳定模型 ID、revision、配置 digest 和解析路径；两个新本地 profile 都必须同时包含 `transcriber` 与 `diarization` component。旧 profile 仅为历史兼容。Cloud pipeline 的组件列表为空，身份由 `cloud_profile` 快照保存。
-- Summary Profile 拥有 endpoint、认证模式、credential ref 和默认模型；Summary Recipe 只有显式配置时才覆盖模型，`model_source` 记录最终来源。
+- Summary Profile 拥有 endpoint、认证模式、credential ref、默认模型以及 `max_input_tokens` / `max_output_tokens`；缺省时分别兼容为 8000 / 2000。Summary Recipe 将这两个值快照为 `input_token_budget` / `max_output_tokens`，只有显式配置时才覆盖模型，`model_source` 记录最终来源。
 - `device_policy` 是用户意图，实际设备属于 RuntimePlan。
 - 任务执行前源文件 fingerprint 不一致时失败为 `SOURCE_CHANGED`。
 
@@ -1035,7 +1036,7 @@ INTERNAL
 
 1. WorkflowDraft、WorkflowSpecSnapshot、WorkflowSnapshot、WorkflowEvent、artifact metadata、operation payload digest 和日志都不得保存 secret。
 2. 只保存 opaque `credential_ref`。
-3. Profile 使用稳定 UUID 和不可变 version；可改名的 Profile name 不得作为 credential identity。Summary Profile 拥有 endpoint、认证模式、credential ref 和默认模型，Summary Recipe 只能显式覆盖模型。
+3. Profile 使用稳定 UUID 和不可变 version；可改名的 Profile name 不得作为 credential identity。Summary Profile 拥有 endpoint、认证模式、credential ref、默认模型和 token limits，Summary Recipe 只能显式覆盖模型。
 4. worker 重启后 grant 消失；任务再次发出 `credentials_required`。
 5. renderer 只提交 Profile identity 和可选模型覆盖；桌面受信任层负责解析并持久化版本化的非敏感 Provider Authorization Snapshot、校验 provider binding，并从 DPAPI 或未来系统 keychain 解析秘密。
 6. Profile 编辑和删除不得清除仍被 workflow 引用的非敏感历史版本；credential 的显式撤销独立处理并可阻止旧任务再次取得 secret。

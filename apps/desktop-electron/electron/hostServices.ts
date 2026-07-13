@@ -12,7 +12,14 @@ const vendorTomlPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '
 const TOML = (existsSync(vendorTomlPath) ? require(vendorTomlPath) : require('@iarna/toml')) as typeof import('@iarna/toml')
 
 type JsonObject = Record<string, any>
+const DEFAULT_SUMMARY_MAX_INPUT_TOKENS = 8000
+const DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS = 2000
 const defaultModel = (modelPath: string, required: boolean, description: string) => ({ path: modelPath, required, description })
+
+function normalizeTokenLimit(value: unknown, fallback: number): number {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+}
 
 async function readToml(filePath: string, fallback: JsonObject): Promise<JsonObject> {
   if (!existsSync(filePath)) return structuredClone(fallback)
@@ -56,6 +63,10 @@ function encryptSecret(secret: string): string {
 
 function normalizeProfile(raw: JsonObject, prefix: string): JsonObject {
   const name = String(raw.name ?? '').trim()
+  const summaryLimits = prefix === 'summary-profile-' ? {
+    max_input_tokens: normalizeTokenLimit(raw.max_input_tokens, DEFAULT_SUMMARY_MAX_INPUT_TOKENS),
+    max_output_tokens: normalizeTokenLimit(raw.max_output_tokens, DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS),
+  } : {}
   return {
     id: String(raw.id ?? '').trim() || stableId(prefix, name),
     version: Math.max(Number(raw.version ?? 1), 1),
@@ -64,6 +75,7 @@ function normalizeProfile(raw: JsonObject, prefix: string): JsonObject {
     model: String(raw.model ?? '').trim(),
     api_key: '',
     has_api_key: Boolean(raw.encrypted_api_key),
+    ...summaryLimits,
   }
 }
 
@@ -203,7 +215,18 @@ export class HostServices {
     const prefix = kind === 'asr' ? 'cloud-asr-profile-' : 'summary-profile-'
     const secret = String(input.api_key ?? '').trim()
     const storedSecret = secret ? encryptSecret(secret) : String(previous?.encrypted_api_key ?? '')
-    const next = { id: String(input.id ?? previous?.id ?? '').trim() || stableId(prefix, name), version: previous ? Math.max(Number(previous.version ?? 1), 1) + 1 : Math.max(Number(input.version ?? 1), 1), name, base_url: String(input.base_url ?? '').trim(), model: String(input.model ?? '').trim(), encrypted_api_key: storedSecret }
+    const next = {
+      id: String(input.id ?? previous?.id ?? '').trim() || stableId(prefix, name),
+      version: previous ? Math.max(Number(previous.version ?? 1), 1) + 1 : Math.max(Number(input.version ?? 1), 1),
+      name,
+      base_url: String(input.base_url ?? '').trim(),
+      model: String(input.model ?? '').trim(),
+      encrypted_api_key: storedSecret,
+      ...(kind === 'summary' ? {
+        max_input_tokens: normalizeTokenLimit(input.max_input_tokens ?? previous?.max_input_tokens, DEFAULT_SUMMARY_MAX_INPUT_TOKENS),
+        max_output_tokens: normalizeTokenLimit(input.max_output_tokens ?? previous?.max_output_tokens, DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS),
+      } : {}),
+    }
     if (index >= 0) profiles[index] = next; else profiles.push(next)
     profiles.sort((a, b) => String(a.name).localeCompare(String(b.name)))
     await writeToml(filePath, { last_profile: name, profiles })
@@ -288,6 +311,8 @@ export class HostServices {
       base_url: String(profile.base_url ?? '').trim(),
       auth_mode: authMode,
       model: String(profile.model ?? '').trim(),
+      input_token_budget: normalizeTokenLimit(profile.max_input_tokens, DEFAULT_SUMMARY_MAX_INPUT_TOKENS),
+      max_output_tokens: normalizeTokenLimit(profile.max_output_tokens, DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS),
       model_source: 'profile_default',
       credential_ref: authMode === 'bearer' ? `summary:${profile.id}` : null,
       provider_binding_sha256: providerBindingDigest(profile, authMode),

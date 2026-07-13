@@ -4,4 +4,6 @@ last_profile = "example"
 name = "example"
 base_url = "https://api.example.com/v1"
 model = "example-model"
+max_input_tokens = 8000
+max_output_tokens = 2000
 encrypted_api_key = ""

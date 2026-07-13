@@ -25,6 +25,7 @@ describe('HostServices trusted workflow draft', () => {
     const profile = catalogs.summary_profiles[0]
     const template = catalogs.summary_templates[0]
 
+    expect(profile).toMatchObject({ max_input_tokens: 8000, max_output_tokens: 2000 })
     await expect(host.trustedWorkflowDraft({
       summary: {
         profile_id: profile.id,
@@ -34,6 +35,40 @@ describe('HostServices trusted workflow draft', () => {
     })).resolves.toMatchObject({
       summary: { profile_id: profile.id, profile_version: profile.version },
     })
+  })
+
+  it('exposes profile token limits and locks them into the trusted workflow snapshot', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'asr-local-profile-token-limits-'))
+    const configDir = path.join(root, 'config')
+    await mkdir(configDir)
+    await writeFile(path.join(configDir, 'summary_profiles.toml'), `[[profiles]]\nname = "Token Profile"\nbase_url = "https://example.test/v1"\nmodel = "model"\nmax_input_tokens = 12000\nmax_output_tokens = 4096\n`)
+    await writeFile(path.join(configDir, 'summary_templates.toml'), `[[templates]]\nname = "Template"\nprompt = "总结"\n`)
+    const host = new HostServices(root, configDir, path.join(root, 'outputs'))
+    const catalogs = await host.catalogs()
+    const profile = catalogs.summary_profiles[0]
+    const template = catalogs.summary_templates[0]
+
+    expect(profile).toMatchObject({ max_input_tokens: 12000, max_output_tokens: 4096 })
+    await expect(host.trustedWorkflowDraft({
+      summary: {
+        profile_id: profile.id,
+        profile_version: profile.version,
+        input_token_budget: 1,
+        max_output_tokens: 1,
+        template: { id: template.id, version: template.version },
+      },
+    })).resolves.toMatchObject({
+      summary: { input_token_budget: 12000, max_output_tokens: 4096 },
+    })
+    const saved = await host.saveProfile('summary', {
+      name: 'Token Profile',
+      base_url: 'https://example.test/v1',
+      model: 'model',
+      api_key: '',
+      max_input_tokens: 16000,
+      max_output_tokens: 8192,
+    })
+    expect(saved.profiles[0]).toMatchObject({ max_input_tokens: 16000, max_output_tokens: 8192 })
   })
 
   it('resolves a migrated legacy credential by the normalized catalog identity', async () => {
