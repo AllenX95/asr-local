@@ -17,7 +17,7 @@ from app.models.manager import ModelManager
 from app.pipeline.job_runner import run_job
 
 
-_LOCAL_GPU_LANE = threading.Semaphore(1)
+_LOCAL_INFERENCE_LANE = threading.Semaphore(1)
 
 
 class ChunkedLocalTranscriber:
@@ -28,7 +28,10 @@ class ChunkedLocalTranscriber:
 
     def _transcribe_sync(self, spec: dict[str, Any], attempt_id: str, progress=None) -> dict[str, Any]:
         workflow_id = str(spec.get("workflow_id", "workflow-v2"))
-        manager = ModelManager()
+        runtime_plan = spec.get("runtime_plan", {})
+        resolved_device = runtime_plan.get("resolved_device") if isinstance(runtime_plan, dict) else None
+        dtype = runtime_plan.get("dtype") if isinstance(runtime_plan, dict) else None
+        manager = ModelManager(resolved_device=resolved_device, dtype=dtype)
         _validate_snapshot_paths(spec, manager)
         output_root = Path(spec["output"]["directory"])
         workflow_staging = output_root / ".staging" / workflow_id
@@ -63,10 +66,12 @@ class ChunkedLocalTranscriber:
             })
 
         acquired = False
+        uses_cuda = manager.device_map().startswith("cuda")
         try:
             if progress:
-                progress({"phase": "gpu_waiting", "detail": "正在等待本地 GPU 推理通道"})
-            _LOCAL_GPU_LANE.acquire()
+                device_label = "GPU" if uses_cuda else "CPU"
+                progress({"phase": f"{device_label.lower()}_waiting", "detail": f"正在等待本地 {device_label} 推理通道"})
+            _LOCAL_INFERENCE_LANE.acquire()
             acquired = True
             result = run_job(payload, emit=emit, model_manager=manager)
             path = Path(result["md_path"])
@@ -84,7 +89,7 @@ class ChunkedLocalTranscriber:
             }
         finally:
             if acquired:
-                _LOCAL_GPU_LANE.release()
+                _LOCAL_INFERENCE_LANE.release()
             manager.close_local_models()
 
     def close(self) -> None:

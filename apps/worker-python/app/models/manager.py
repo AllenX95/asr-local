@@ -14,9 +14,15 @@ LOCAL_ASR_MODEL_NAMES = {
     QWEN_MODEL_KEY: "Qwen/Qwen3-ASR-1.7B",
 }
 class ModelManager:
-    def __init__(self) -> None:
+    def __init__(self, *, resolved_device: str | None = None, dtype: str | None = None) -> None:
+        if resolved_device not in {None, "cpu", "cuda:0"}:
+            raise ValueError(f"unsupported resolved device: {resolved_device}")
+        if dtype not in {None, "float16", "float32", "bfloat16"}:
+            raise ValueError(f"unsupported torch dtype: {dtype}")
         self._project_root = project_root()
         self._config = load_models_config()
+        self._resolved_device = resolved_device
+        self._dtype = dtype
         self._qwen_model = None
         self._pyannote_pipeline = None
         self._torch = None
@@ -55,10 +61,14 @@ class ModelManager:
         return self.torch.device(self.device_map())
 
     def device_map(self) -> str:
+        if self._resolved_device is not None:
+            return self._resolved_device
         return "cuda:0" if self.torch.cuda.is_available() else "cpu"
 
     def qwen_torch_dtype(self):
-        return self.torch.float16 if self.torch.cuda.is_available() else self.torch.float32
+        if self._dtype is not None:
+            return getattr(self.torch, self._dtype)
+        return self.torch.float16 if self.device_map().startswith("cuda") else self.torch.float32
 
     def torch_dtype(self):
         return self.qwen_torch_dtype()
@@ -88,10 +98,17 @@ class ModelManager:
                     "QWEN_RUNTIME_UNAVAILABLE: qwen-asr cannot be imported in the main Python runtime."
                 ) from exc
 
+            device_map = self.device_map()
+            torch_dtype = self.qwen_torch_dtype()
+            LOGGER.info(
+                "loading Qwen model with resolved runtime | device=%s | dtype=%s",
+                device_map,
+                torch_dtype,
+            )
             self._qwen_model = Qwen3ASRModel.from_pretrained(
                 str(self.qwen_path),
-                dtype=self.qwen_torch_dtype(),
-                device_map=self.device_map(),
+                dtype=torch_dtype,
+                device_map=device_map,
                 max_inference_batch_size=self.local_asr_batch_size(),
                 max_new_tokens=256,
             )
@@ -124,14 +141,18 @@ class ModelManager:
                     module=r"pyannote\.audio\.core\.io",
                 )
                 self._pyannote_pipeline = Pipeline.from_pretrained(str(self.pyannote_path))
-            if self.torch.cuda.is_available():
+            target_device = self.device_map()
+            if self._resolved_device is not None or target_device.startswith("cuda"):
                 try:
-                    self._pyannote_pipeline.to(self.torch.device("cuda"))
+                    self._pyannote_pipeline.to(self.torch.device(target_device))
+                    LOGGER.info("Pyannote pipeline moved to resolved runtime | device=%s", target_device)
                 except Exception as exc:
-                    LOGGER.warning(
-                        "failed to move pyannote pipeline to CUDA; continuing with default device | error=%s",
-                        exc,
-                    )
+                    if self._resolved_device is not None:
+                        self._pyannote_pipeline = None
+                        raise RuntimeError(
+                            f"MODEL_DEVICE_MOVE_FAILED: failed to move Pyannote pipeline to {target_device}"
+                        ) from exc
+                    LOGGER.warning("failed to move pyannote pipeline to CUDA; continuing on CPU | error=%s", exc)
         return self._pyannote_pipeline
 
     def close_qwen_model(self) -> None:

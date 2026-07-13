@@ -158,7 +158,7 @@ def run_job(payload: dict, emit=None, model_manager: ModelManager | None = None)
             stage="releasing_model",
             progress=0.40,
             total_ms=total_ms,
-            payload={"detail": "正在释放 Pyannote 显存，准备加载 ASR 模型"},
+            payload={"detail": "正在释放 Pyannote 模型资源，准备加载 ASR 模型"},
         )
         manager.close_pyannote_pipeline()
 

@@ -371,6 +371,7 @@ function updatedAt(snapshot: WorkflowSnapshot): string {
 function phaseLabel(value: string | null | undefined): string {
   const labels: Record<string, string> = {
     starting_transcription: '启动转录',
+    cpu_waiting: '等待本地 CPU 通道',
     gpu_waiting: '等待本地 GPU 通道',
     audio_normalizing: '解码与标准化音频',
     dependency_importing: '加载运行依赖',
@@ -384,7 +385,7 @@ function phaseLabel(value: string | null | undefined): string {
     generating: '语音识别与说话人分析',
     formatting_transcript: '整理转录结果',
     transcribing: '按分块执行语音识别',
-    releasing_model: '释放上一阶段显存',
+    releasing_model: '释放上一阶段模型资源',
     cloud_asr_request: '调用云端语音识别',
     legacy_transcription: '兼容转录流程',
   };
