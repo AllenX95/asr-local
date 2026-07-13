@@ -35,7 +35,7 @@ class ChunkedLocalTranscriber:
         _validate_snapshot_paths(spec, manager)
         output_root = Path(spec["output"]["directory"])
         workflow_staging = output_root / ".staging" / workflow_id
-        staging_dir = workflow_staging / f"chunked-{self.backend_id}-{attempt_id}"
+        staging_dir = workflow_staging / attempt_id
         payload = {
             "job_id": workflow_id,
             "source_path": spec["source"]["path"],

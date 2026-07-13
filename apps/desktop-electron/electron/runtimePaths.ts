@@ -20,6 +20,7 @@ export interface RuntimePaths {
   configDir: string
   stateDir: string
   outputsDir: string
+  legacyOutputsDir?: string
   logsDir: string
 }
 
@@ -42,7 +43,12 @@ export function resolveRuntimePaths(input: RuntimePathInput): RuntimePaths {
     stateDir = path.join(root, 'workflow')
     outputsDir = path.join(root, 'outputs')
     logsDir = path.join(root, 'logs')
-  } else if (input.isPackaged || profile === 'real') {
+  } else if (input.isPackaged) {
+    configDir = path.join(input.userDataDir, 'config')
+    stateDir = path.join(input.userDataDir, 'workflow')
+    outputsDir = path.join(input.documentsDir, 'ASR Local')
+    logsDir = path.join(input.userDataDir, 'logs')
+  } else if (profile === 'real') {
     configDir = path.join(input.userDataDir, 'config')
     stateDir = path.join(input.userDataDir, 'workflow')
     outputsDir = path.join(projectRoot, 'outputs')
@@ -54,6 +60,10 @@ export function resolveRuntimePaths(input: RuntimePathInput): RuntimePaths {
     logsDir = path.join(projectRoot, 'outputs', 'logs')
   }
 
+  const resolvedOutputsDir = path.resolve(input.env.ASR_LOCAL_OUTPUTS_DIR || outputsDir)
+  const legacyOutputsCandidate = input.env.ASR_LOCAL_LEGACY_OUTPUTS_DIR || (input.isPackaged ? path.join(projectRoot, 'outputs') : undefined)
+  const legacyOutputsDir = legacyOutputsCandidate ? path.resolve(legacyOutputsCandidate) : undefined
+
   return {
     projectRoot,
     desktopDir,
@@ -61,7 +71,8 @@ export function resolveRuntimePaths(input: RuntimePathInput): RuntimePaths {
     pythonExecutable: path.resolve(pythonExecutable),
     configDir: path.resolve(input.env.ASR_LOCAL_CONFIG_DIR || configDir),
     stateDir: path.resolve(input.env.ASR_LOCAL_STATE_DIR || stateDir),
-    outputsDir: path.resolve(input.env.ASR_LOCAL_OUTPUTS_DIR || outputsDir),
+    outputsDir: resolvedOutputsDir,
+    legacyOutputsDir: legacyOutputsDir === resolvedOutputsDir ? undefined : legacyOutputsDir,
     logsDir: path.resolve(input.env.ASR_LOCAL_LOG_DIR || logsDir),
   }
 }

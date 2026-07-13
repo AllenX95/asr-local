@@ -64,4 +64,23 @@ describe('HostServices trusted workflow draft', () => {
     expect(history.filter((item) => item.kind === 'summary')).toHaveLength(1)
     expect(history.some((item) => item.title === 'temporary.md')).toBe(false)
   })
+
+  it('keeps old output history visible after the packaged output root changes', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'asr-local-history-legacy-'))
+    const outputs = path.join(root, 'current')
+    const legacyOutputs = path.join(root, 'legacy')
+    await mkdir(path.join(outputs, 'transcripts'), { recursive: true })
+    await mkdir(path.join(legacyOutputs, 'summary'), { recursive: true })
+    await mkdir(path.join(legacyOutputs, '.jobs', 'wf_ignored'), { recursive: true })
+    await writeFile(path.join(outputs, 'transcripts', 'new--wf_1.md'), '# new')
+    await writeFile(path.join(legacyOutputs, 'summary', 'old--wf_2.md'), '# old')
+    await writeFile(path.join(legacyOutputs, '.jobs', 'wf_ignored', 'job.md'), '# ignored')
+
+    const host = new HostServices(root, path.join(root, 'config'), outputs, undefined, undefined, legacyOutputs)
+    const history = await host.history(100)
+
+    expect(history.some((item) => item.title === 'new--wf_1.md')).toBe(true)
+    expect(history.some((item) => item.title === 'old--wf_2.md')).toBe(true)
+    expect(history.some((item) => item.title === 'job.md')).toBe(false)
+  })
 })

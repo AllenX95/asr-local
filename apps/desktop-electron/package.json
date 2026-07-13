@@ -55,6 +55,7 @@
     "appId": "local.asr.desktop",
     "productName": "ASR Local",
     "asar": false,
+    "electronDist": "node_modules/electron/dist",
     "npmRebuild": true,
     "directories": {
       "output": "release-electron"

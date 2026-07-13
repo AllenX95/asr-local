@@ -48,6 +48,9 @@ class ChunkedLocalDeviceTests(unittest.TestCase):
             self.assertEqual(progress[0]["phase"], "cpu_waiting")
             self.assertIn("CPU", progress[0]["detail"])
             self.assertEqual(result["text"], "CPU transcript")
+            payload = run_job.call_args.args[0]
+            self.assertEqual(Path(payload["output_dir"]), root / ".staging" / "wf_cpu" / "attempt_cpu")
+            self.assertEqual(Path(payload["job_workspace_dir"]), root / ".jobs" / "wf_cpu")
             manager_type.return_value.close_local_models.assert_called_once_with()
 
 

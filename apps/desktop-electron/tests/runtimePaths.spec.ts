@@ -3,6 +3,39 @@ import { describe, expect, it } from 'vitest'
 import { resolveRuntimePaths } from '../electron/runtimePaths.js'
 
 describe('resolveRuntimePaths', () => {
+  it('keeps packaged workflow outputs in a shallow Documents folder', () => {
+    const result = resolveRuntimePaths({
+      isPackaged: true,
+      appDir: 'E:/app/resources/app/dist-electron',
+      resourcesPath: 'E:/app/resources',
+      userDataDir: 'C:/Users/test/AppData/Roaming/ASR Local',
+      documentsDir: 'C:/Users/test/Documents',
+      env: {},
+      pathExists: () => true,
+    })
+
+    expect(result.outputsDir).toBe(path.normalize('C:/Users/test/Documents/ASR Local'))
+    expect(result.legacyOutputsDir).toBe(path.normalize('E:/app/resources/runtime-root/outputs'))
+  })
+
+  it('keeps explicit output overrides and avoids duplicate legacy roots', () => {
+    const result = resolveRuntimePaths({
+      isPackaged: true,
+      appDir: 'E:/app/resources/app/dist-electron',
+      resourcesPath: 'E:/app/resources',
+      userDataDir: 'C:/Users/test/AppData/Roaming/ASR Local',
+      documentsDir: 'C:/Users/test/Documents',
+      env: {
+        ASR_LOCAL_OUTPUTS_DIR: 'D:/ASR',
+        ASR_LOCAL_LEGACY_OUTPUTS_DIR: 'D:/ASR',
+      },
+      pathExists: () => true,
+    })
+
+    expect(result.outputsDir).toBe(path.normalize('D:/ASR'))
+    expect(result.legacyOutputsDir).toBeUndefined()
+  })
+
   it('uses installed application data for real-data hot debugging', () => {
     const result = resolveRuntimePaths({
       isPackaged: false,

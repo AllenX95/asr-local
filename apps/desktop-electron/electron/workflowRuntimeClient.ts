@@ -88,7 +88,8 @@ export class WorkflowRuntimeClient extends EventEmitter {
       this.emit('error', error)
       this.emit('runtime-status', { state: 'error', occurred_at: new Date().toISOString(), detail: `Python Runtime 启动失败: ${error.message}` })
     })
-    const hello = await this.send('runtime.hello', { supported_versions: [2] }) as { selected_version?: number; capabilities?: { pipeline_mode?: { resolved?: string } } }
+    // Cold production imports can exceed the normal request timeout on Windows.
+    const hello = await this.send('runtime.hello', { supported_versions: [2] }, undefined, 120_000) as { selected_version?: number; capabilities?: { pipeline_mode?: { resolved?: string } } }
     if (hello.selected_version !== 2) { child.kill(); throw new Error('Workflow runtime did not negotiate protocol version 2') }
     if (pipelineMode === 'production' && hello.capabilities?.pipeline_mode?.resolved !== 'production') {
       child.kill()

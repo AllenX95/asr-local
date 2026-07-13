@@ -13,7 +13,7 @@ import { buildSecretProvideParams } from './credentialGrant.js'
 const appDir = path.dirname(fileURLToPath(import.meta.url))
 const userDataDir = app.getPath('userData')
 const paths = resolveRuntimePaths({ isPackaged: app.isPackaged, appDir, resourcesPath: process.resourcesPath, userDataDir, documentsDir: app.getPath('documents'), env: process.env, pathExists: existsSync })
-const { projectRoot, desktopDir, workerDir, pythonExecutable, outputsDir } = paths
+const { projectRoot, desktopDir, workerDir, pythonExecutable, outputsDir, legacyOutputsDir } = paths
 process.env.ASR_LOCAL_STATE_DIR = paths.stateDir
 process.env.ASR_LOCAL_CONFIG_DIR = paths.configDir
 process.env.ASR_LOCAL_OUTPUTS_DIR = paths.outputsDir
@@ -21,7 +21,7 @@ const logger = createSessionLogger(paths.logsDir)
 process.env.ASR_LOCAL_WORKER_LOG ??= logger.paths.worker
 if (!process.env.ASR_LOCAL_V2_PIPELINE_MODE) process.env.ASR_LOCAL_V2_PIPELINE_MODE = app.isPackaged ? 'production' : 'auto'
 const runtime = new WorkflowRuntimeClient(projectRoot, { stderrSink: logger.workerStderr })
-const host = new HostServices(projectRoot, paths.configDir, outputsDir, process.env.ASR_LOCAL_LEGACY_CONFIG_DIR, pythonExecutable, process.env.ASR_LOCAL_LEGACY_OUTPUTS_DIR)
+const host = new HostServices(projectRoot, paths.configDir, outputsDir, process.env.ASR_LOCAL_LEGACY_CONFIG_DIR, pythonExecutable, legacyOutputsDir)
 logger.info('Electron session starting', { packaged: app.isPackaged, projectRoot, pythonExecutable, configDir: paths.configDir, stateDir: paths.stateDir, outputsDir, logsDir: paths.logsDir })
 let mainWindow: BrowserWindow | null = null
 let quitting = false
@@ -30,7 +30,7 @@ const grantedPaths = new Set<string>()
 function grantPath(target: string): string { const resolved = path.resolve(target); grantedPaths.add(resolved); return resolved }
 function assertAllowedPath(target: string): string {
   const resolved = path.resolve(target)
-  const roots = [projectRoot, app.getPath('userData'), outputsDir, ...grantedPaths]
+  const roots = [projectRoot, app.getPath('userData'), outputsDir, ...(legacyOutputsDir ? [legacyOutputsDir] : []), ...grantedPaths]
   if (!roots.some((root) => resolved === root || resolved.startsWith(`${root}${path.sep}`))) throw new Error(`Path is outside approved locations: ${resolved}`)
   return resolved
 }
@@ -111,7 +111,7 @@ async function invoke(command: string, args: Record<string, unknown>): Promise<u
 async function createWindow(): Promise<void> {
   await host.initialize()
   const stateDir = process.env.ASR_LOCAL_STATE_DIR
-  const legacyOutputs = process.env.ASR_LOCAL_LEGACY_OUTPUTS_DIR
+  const legacyOutputs = legacyOutputsDir
   if (stateDir && legacyOutputs) {
     const source = path.join(legacyOutputs, '.workflow', 'registry.sqlite3')
     const target = path.join(stateDir, 'registry.sqlite3')
