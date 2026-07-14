@@ -2,7 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { reduceWorkflowEvent } from '../workflows/reducer'
 import type { WorkflowRuntime } from '../workflows/runtime'
-import type { ArtifactRevisionCommand, RuntimeStatusEvent, WorkflowDraft, WorkflowEvent, WorkflowSnapshot } from '../workflows/types'
+import type { ArtifactRevisionCommand, RuntimeStatusEvent, WorkflowDraft, WorkflowEvent, WorkflowResummarizeCommand, WorkflowSnapshot } from '../workflows/types'
 
 /**
  * Workflow state is keyed by workflow identity. It does not know about lanes,
@@ -85,6 +85,13 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return snapshot
   }
 
+  async function resummarize(command: WorkflowResummarizeCommand): Promise<WorkflowSnapshot> {
+    const snapshot = await requireRuntime().resummarize(command)
+    workflowsById.value[snapshot.workflow_id] = snapshot
+    selectedWorkflowId.value = snapshot.workflow_id
+    return snapshot
+  }
+
   async function registerRevision(command: ArtifactRevisionCommand): Promise<WorkflowSnapshot> {
     const snapshot = await requireRuntime().registerRevision(command)
     workflowsById.value[command.workflow_id] = snapshot
@@ -116,6 +123,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     refresh,
     control,
     retry,
+    resummarize,
     registerRevision,
     clear,
     select,

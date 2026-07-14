@@ -9,7 +9,7 @@ const allowedCommands = new Set([
   'load_summary_profiles', 'save_summary_profile', 'delete_summary_profile', 'load_summary_templates',
   'save_summary_template', 'delete_summary_template', 'list_history_items',
   'worker_health_check',
-  'workflow_v2_capabilities', 'workflow_v2_catalogs', 'workflow_v2_prompt_preview', 'workflow_v2_submit', 'workflow_v2_list', 'workflow_v2_get',
+  'workflow_v2_capabilities', 'workflow_v2_catalogs', 'workflow_v2_prompt_preview', 'workflow_v2_submit', 'workflow_v2_resummarize', 'workflow_v2_list', 'workflow_v2_get',
   'workflow_v2_clear', 'workflow_v2_control', 'workflow_v2_retry', 'workflow_v2_register_revision', 'workflow_v2_shutdown',
 ])
 

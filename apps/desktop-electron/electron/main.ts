@@ -97,6 +97,16 @@ async function invoke(command: string, args: Record<string, unknown>): Promise<u
       assertAllowedPath(String(draft.output?.directory ?? ''))
       return runtime.request('workflow.submit', { draft: await host.trustedWorkflowDraft(draft) }, requireString(args, 'operationId'))
     }
+    case 'workflow_v2_resummarize': {
+      const summary = await host.trustedSummaryRecipe(args.summary as Record<string, unknown>)
+      return runtime.request('workflow.resummarize', {
+        source_workflow_id: requireString(args, 'sourceWorkflowId'),
+        expected_attempt_id: requireString(args, 'expectedAttemptId'),
+        expected_sequence: args.expectedSequence,
+        input_artifact_id: requireString(args, 'inputArtifactId'),
+        summary,
+      }, requireString(args, 'operationId'))
+    }
     case 'workflow_v2_list': return runtime.request('workflow.list', { statuses: args.statuses ?? [], cursor: null, limit: 100 })
     case 'workflow_v2_get': return runtime.request('workflow.get', { workflow_id: requireString(args, 'workflowId'), timeline_limit: args.timelineLimit ?? 200 })
     case 'workflow_v2_clear': return runtime.request('workflow.clear', { workflow_id: requireString(args, 'workflowId') }, requireString(args, 'operationId'))

@@ -1,6 +1,6 @@
 import { electronBridge } from '../../ipc/desktopBridge'
 import type { RuntimeStatusHandler, WorkflowEventHandler, WorkflowRuntime } from '../runtime'
-import type { ArtifactRevisionCommand, PromptPreviewInput, PromptPreviewResult, WorkflowCapabilities, WorkflowControlCommand, WorkflowDraft, WorkflowRetryCommand, WorkflowSnapshot } from '../types'
+import type { ArtifactRevisionCommand, PromptPreviewInput, PromptPreviewResult, WorkflowCapabilities, WorkflowControlCommand, WorkflowDraft, WorkflowResummarizeCommand, WorkflowRetryCommand, WorkflowSnapshot } from '../types'
 
 const operationId = (prefix: string) => `${prefix}_${crypto.randomUUID()}`
 
@@ -14,6 +14,7 @@ export class ElectronWorkflowRuntime implements WorkflowRuntime {
   async clear(workflowId: string): Promise<void> { await this.bridge.invoke('workflow_v2_clear', { operationId: operationId('op_clear'), workflowId }) }
   async control(command: WorkflowControlCommand): Promise<WorkflowSnapshot> { const result = await this.bridge.invoke<{ snapshot: WorkflowSnapshot }>('workflow_v2_control', { operationId: operationId('op_control'), workflowId: command.workflow_id, expectedAttemptId: command.expected_attempt_id, action: command.action }); return result.snapshot }
   async retry(command: WorkflowRetryCommand): Promise<WorkflowSnapshot> { const result = await this.bridge.invoke<{ snapshot: WorkflowSnapshot }>('workflow_v2_retry', { operationId: operationId('op_retry'), workflowId: command.workflow_id, expectedAttemptId: command.expected_attempt_id, expectedSequence: command.expected_sequence, fromStage: command.from_stage, inputArtifactId: command.input_artifact_id ?? null }); return result.snapshot }
+  async resummarize(command: WorkflowResummarizeCommand): Promise<WorkflowSnapshot> { const result = await this.bridge.invoke<{ snapshot: WorkflowSnapshot }>('workflow_v2_resummarize', { operationId: operationId('op_resummarize'), sourceWorkflowId: command.source_workflow_id, expectedAttemptId: command.expected_attempt_id, expectedSequence: command.expected_sequence, inputArtifactId: command.input_artifact_id, summary: command.summary }); return result.snapshot }
   async registerRevision(command: ArtifactRevisionCommand): Promise<WorkflowSnapshot> { const result = await this.bridge.invoke<{ snapshot: WorkflowSnapshot }>('workflow_v2_register_revision', { operationId: operationId('op_revision'), params: command }); return result.snapshot }
   subscribe(handler: WorkflowEventHandler): () => void { return this.bridge.onWorkflowEvent(handler) }
   subscribeRuntimeStatus(handler: RuntimeStatusHandler): () => void { return this.bridge.onRuntimeStatus(handler) }

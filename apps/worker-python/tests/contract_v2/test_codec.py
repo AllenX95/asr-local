@@ -85,6 +85,23 @@ class ContractV2CodecTests(unittest.TestCase):
         payload.pop("operation_id")
         with self.assertRaises(ProtocolError):
             decode_request(json.dumps(payload).encode("utf-8"))
+
+    def test_resummarize_accepts_a_trusted_summary_recipe(self) -> None:
+        submit = json.loads((FIXTURES / "workflow-submit.request.json").read_text(encoding="utf-8"))
+        payload = {
+            **submit,
+            "method": "workflow.resummarize",
+            "params": {
+                "source_workflow_id": "wf_done",
+                "expected_attempt_id": "att_done",
+                "expected_sequence": 24,
+                "input_artifact_id": "artifact_transcript",
+                "summary": submit["params"]["draft"]["summary"],
+            },
+        }
+        decoded = decode_request(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        self.assertEqual(decoded["method"], "workflow.resummarize")
+        self.assertEqual(decoded["params"]["summary"]["template"]["id"], "summary-template-uuid")
         payload["operation_id"] = "op_clear"
         payload["params"]["delete_artifacts"] = True
         with self.assertRaises(ProtocolError):

@@ -8,6 +8,7 @@ import type {
   WorkflowDraft,
   WorkflowEvent,
   WorkflowRetryCommand,
+  WorkflowResummarizeCommand,
   WorkflowSnapshot,
 } from '../types'
 import type { RuntimeStatusHandler, WorkflowEventHandler, WorkflowRuntime } from '../runtime'
@@ -35,7 +36,7 @@ export class FakeWorkflowRuntime implements WorkflowRuntime {
     return {
       max_inflight_workflows: 3,
       pipeline_profiles: ['pyannote_qwen3_asr', 'cloud_asr'],
-      methods: ['workflow.submit', 'workflow.list', 'workflow.get', 'workflow.clear', 'workflow.control', 'workflow.retry', 'artifact.register_revision'],
+      methods: ['workflow.submit', 'workflow.resummarize', 'workflow.list', 'workflow.get', 'workflow.clear', 'workflow.control', 'workflow.retry', 'artifact.register_revision'],
     }
   }
 
@@ -144,6 +145,26 @@ export class FakeWorkflowRuntime implements WorkflowRuntime {
     next.timestamps.updated_at = this.clock()
     this.snapshots.set(next.workflow_id, next)
     this.emit(next, 'retry_started')
+    return next
+  }
+
+  async resummarize(command: WorkflowResummarizeCommand): Promise<WorkflowSnapshot> {
+    const current = await this.get(command.source_workflow_id)
+    if (!['completed', 'completed_with_warnings', 'failed', 'interrupted'].includes(current.status)) throw new Error('WORKFLOW_NOT_TERMINAL')
+    if (current.attempt.attempt_id !== command.expected_attempt_id) throw new Error('STALE_ATTEMPT')
+    if (current.sequence !== command.expected_sequence) throw new Error('SEQUENCE_CONFLICT')
+    if (!current.artifacts.some((artifact) => artifact.artifact_id === command.input_artifact_id && artifact.kind === 'transcript_markdown' && !artifact.stale)) throw new Error('TRANSCRIPT_CHECKPOINT_MISSING')
+    const created = await this.submit({
+      draft_version: 2,
+      display_name: `${current.spec.display_name}（再总结）`,
+      source: current.spec.source,
+      transcription: current.spec.transcription,
+      summary: { ...current.spec.summary, ...command.summary },
+      output: current.spec.output,
+    })
+    const next = this.clone(created)
+    next.recovery = { recommended_retry_stage: 'summarizing', interrupted_attempt_id: null, input_artifact_id: command.input_artifact_id }
+    this.snapshots.set(next.workflow_id, next)
     return next
   }
 

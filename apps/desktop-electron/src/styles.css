@@ -546,6 +546,15 @@ h2 {
 
 .terminal-actions { justify-content: flex-end; }
 .clear-task { color: var(--danger); }
+.resummary-panel {
+  display: grid;
+  gap: 9px;
+  border: 1px solid rgba(20, 117, 111, 0.28);
+  border-radius: 8px;
+  background: rgba(20, 117, 111, 0.045);
+  padding: 11px;
+}
+.resummary-panel > strong { color: var(--teal); font-size: 13px; }
 .diagnostics-toggle {
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);

@@ -35,6 +35,11 @@ const refreshing = ref(false);
 const clearingWorkflowId = ref<string | null>(null);
 const recentExpanded = ref(true);
 const diagnosticsExpanded = ref(false);
+const resummaryOpen = ref(false);
+const resummaryProfileName = ref('');
+const resummaryTemplateName = ref('');
+const resummaryPrivacyConfirmed = ref(false);
+const resummarizing = ref(false);
 const pyannoteReady = computed(() => appStore.settings.models?.pyannote_exists ?? false);
 const qwenReady = computed(() => appStore.settings.models?.qwen_exists ?? false);
 const runtimeReadiness = computed(() => (appStore.settings.health?.model_readiness ?? null) as Record<string, any> | null);
@@ -69,6 +74,16 @@ const selectedProfile = computed(() =>
 const selectedTemplate = computed(() =>
   availableTemplates.value.find((template) => template.name === selectedTemplateName.value) ?? null,
 );
+const resummaryProfile = computed(() =>
+  availableProfiles.value.find((profile) => profile.name === resummaryProfileName.value) ?? null,
+);
+const resummaryTemplate = computed(() =>
+  availableTemplates.value.find((template) => template.name === resummaryTemplateName.value) ?? null,
+);
+const resummaryProviderAuthorizationText = computed(() => {
+  if (!resummaryProfile.value) return '';
+  return `总结文本将发送到 ${resummaryProfile.value.base_url}，使用模型 ${resummaryProfile.value.model}。`;
+});
 const providerAuthorizationText = computed(() => {
   const notices: string[] = [];
   if (selectedProfile.value) notices.push(`总结文本将发送到 ${selectedProfile.value.base_url}，使用模型 ${selectedProfile.value.model}`);
@@ -78,6 +93,9 @@ const pipelineLabel = computed(() => 'Qwen3-ASR');
 
 watch(selectedProfileName, () => {
   privacyConfirmed.value = false;
+});
+watch(resummaryProfileName, () => {
+  resummaryPrivacyConfirmed.value = false;
 });
 const selectedWorkflow = computed<WorkflowSnapshot | null>(() => {
   const id = workflowStore.selectedWorkflowId;
@@ -250,6 +268,64 @@ async function refresh(): Promise<void> {
     error.value = String(reason);
   } finally {
     refreshing.value = false;
+  }
+}
+
+function latestTranscript(snapshot: WorkflowSnapshot) {
+  return snapshot.artifacts
+    .filter((artifact) => ['transcript_markdown', 'transcript_json'].includes(artifact.kind) && !artifact.stale)
+    .sort((left, right) => right.revision - left.revision || right.created_at.localeCompare(left.created_at))[0] ?? null;
+}
+
+function canResummarize(snapshot: WorkflowSnapshot): boolean {
+  return ['completed', 'completed_with_warnings'].includes(snapshot.status) && Boolean(latestTranscript(snapshot));
+}
+
+function openResummary(snapshot: WorkflowSnapshot): void {
+  const summary = snapshot.spec.summary as Record<string, any>;
+  const profile = availableProfiles.value.find((item) => item.id === summary.profile_id && item.version === summary.profile_version)
+    ?? availableProfiles.value[0];
+  const template = availableTemplates.value.find((item) => item.id === summary.template?.id && item.version === summary.template?.version)
+    ?? availableTemplates.value[0];
+  resummaryProfileName.value = profile?.name ?? '';
+  resummaryTemplateName.value = template?.name ?? '';
+  resummaryPrivacyConfirmed.value = false;
+  resummaryOpen.value = true;
+  error.value = '';
+}
+
+function closeResummary(): void {
+  if (resummarizing.value) return;
+  resummaryOpen.value = false;
+}
+
+async function resummarize(): Promise<void> {
+  const snapshot = selectedWorkflow.value;
+  const transcript = snapshot ? latestTranscript(snapshot) : null;
+  if (!snapshot || !transcript || !resummaryProfile.value || !resummaryTemplate.value) return;
+  if (!resummaryPrivacyConfirmed.value) {
+    error.value = '请确认转录文本将发送到所选总结服务后再开始再总结。';
+    return;
+  }
+  resummarizing.value = true;
+  error.value = '';
+  try {
+    await workflowStore.resummarize({
+      source_workflow_id: snapshot.workflow_id,
+      expected_attempt_id: snapshot.attempt.attempt_id,
+      expected_sequence: snapshot.sequence,
+      input_artifact_id: transcript.artifact_id,
+      summary: {
+        profile_id: resummaryProfile.value.id,
+        profile_version: resummaryProfile.value.version,
+        template: { id: resummaryTemplate.value.id, version: resummaryTemplate.value.version },
+      },
+    });
+    resummaryOpen.value = false;
+  } catch (reason) {
+    error.value = String(reason);
+  } finally {
+    resummarizing.value = false;
   }
 }
 
@@ -572,10 +648,41 @@ function phaseLabel(value: string | null | undefined): string {
                 <span class="task-identity"><strong>{{ snapshot.spec.display_name }}</strong><small>{{ updatedAt(snapshot) }}</small></span>
                 <span class="status-badge" :data-status="snapshot.status">{{ statusLabel(snapshot) }}</span>
               </button>
-              <div v-if="selectedWorkflow?.workflow_id === snapshot.workflow_id" class="task-expanded terminal-detail">
-                <div class="terminal-actions">
-                  <button v-if="['failed', 'completed', 'interrupted'].includes(snapshot.status)" type="button" @click="retry"><RotateCcw :size="15" />重试</button>
+                <div v-if="selectedWorkflow?.workflow_id === snapshot.workflow_id" class="task-expanded terminal-detail">
+                  <div class="terminal-actions">
+                  <button v-if="['failed', 'completed', 'completed_with_warnings', 'interrupted'].includes(snapshot.status)" type="button" @click="retry"><RotateCcw :size="15" />重试</button>
+                  <button v-if="canResummarize(snapshot)" type="button" @click="openResummary(snapshot)"><RotateCcw :size="15" />再总结</button>
                   <button class="clear-task" type="button" :disabled="clearingWorkflowId === snapshot.workflow_id" @click="clearWorkflow(snapshot)"><Trash2 :size="15" />{{ clearingWorkflowId === snapshot.workflow_id ? '清除中' : '清除记录' }}</button>
+                </div>
+                <div v-if="resummaryOpen && selectedWorkflow?.workflow_id === snapshot.workflow_id" class="resummary-panel">
+                  <strong>使用已有 transcript 再总结</strong>
+                  <label>
+                    <span>总结模型 Profile</span>
+                    <select v-model="resummaryProfileName">
+                      <option value="">未选择</option>
+                      <option v-for="profile in availableProfiles" :key="profile.id" :value="profile.name">{{ profile.name }} · {{ profile.model }}</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>总结模板</span>
+                    <select v-model="resummaryTemplateName">
+                      <option value="">未选择</option>
+                      <option v-for="template in availableTemplates" :key="template.id" :value="template.name">{{ template.name }}</option>
+                    </select>
+                  </label>
+                  <div v-if="resummaryProfile" class="privacy-confirmation">
+                    <strong>云端总结授权</strong>
+                    <p>{{ resummaryProviderAuthorizationText }}</p>
+                    <label class="checkbox-row">
+                      <input v-model="resummaryPrivacyConfirmed" type="checkbox" />
+                      <span>我确认已了解上述 provider、模型和文本出站范围，并授权本次再总结。</span>
+                    </label>
+                  </div>
+                  <p class="field-hint">将复用本任务最新的 transcript，不会重新执行语音识别。</p>
+                  <div class="workflow-actions">
+                    <button type="button" :disabled="resummarizing || !resummaryProfile || !resummaryTemplate || !resummaryPrivacyConfirmed" @click="resummarize">{{ resummarizing ? '生成中' : '开始再总结' }}</button>
+                    <button class="ghost" type="button" :disabled="resummarizing" @click="closeResummary">取消</button>
+                  </div>
                 </div>
                 <button class="diagnostics-toggle" type="button" @click="diagnosticsExpanded = !diagnosticsExpanded">
                   <span>产物与诊断信息</span><ChevronDown v-if="diagnosticsExpanded" :size="15" /><ChevronRight v-else :size="15" />

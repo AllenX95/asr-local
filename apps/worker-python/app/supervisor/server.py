@@ -222,6 +222,8 @@ class V2StdioServer:
             return _prompt_preview(params)
         if method == "workflow.submit":
             return await self.supervisor.submit(params["draft"], operation_id=message["operation_id"])
+        if method == "workflow.resummarize":
+            return await self.supervisor.resummarize(params, operation_id=message["operation_id"])
         if method == "workflow.list":
             statuses = set(params.get("statuses", [])) or None
             return {"items": await self.supervisor.list(statuses), "next_cursor": None}
@@ -279,6 +281,7 @@ def capabilities(*, requested_pipeline_mode: str = "auto", resolved_pipeline_mod
             "runtime.capabilities",
             "prompt.preview",
             "workflow.submit",
+            "workflow.resummarize",
             "workflow.list",
             "workflow.get",
             "workflow.clear",

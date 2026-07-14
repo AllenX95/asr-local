@@ -854,6 +854,14 @@ Result：
 - transcription retry 必须版本化或清除所有下游产物引用，不能把旧 summary 误标为新结果。
 - 旧 attempt 的迟到事件必须忽略。
 
+### 10.7.1 `workflow.resummarize`
+
+用于已完成任务更换 Summary Profile 或模板。该操作校验源 workflow 的
+`expected_attempt_id` / `expected_sequence`，复制指定的最新有效 transcript
+作为新 workflow 的输入，只执行 `summarizing` 和最终写入阶段；原 workflow
+及其总结产物保持不变。新的 summary recipe 由 desktop host 根据 Profile 与
+模板身份解析后提交，worker 不接收秘密。
+
 ### 10.8 `artifact.register_revision`
 
 需要 `operation_id`。desktop editor 先把新内容写到 workflow 专属 staging 目录；supervisor 验证路径边界、大小与 digest 后原子登记为新产物修订。

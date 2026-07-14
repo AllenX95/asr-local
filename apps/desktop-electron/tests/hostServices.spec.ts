@@ -35,6 +35,15 @@ describe('HostServices trusted workflow draft', () => {
     })).resolves.toMatchObject({
       summary: { profile_id: profile.id, profile_version: profile.version },
     })
+    await expect(host.trustedSummaryRecipe({
+      profile_id: profile.id,
+      profile_version: profile.version,
+      template: { id: template.id, version: template.version },
+    })).resolves.toMatchObject({
+      profile_id: profile.id,
+      model: 'deepseek-v4-flash',
+      template: { id: template.id, prompt_snapshot: '总结' },
+    })
   })
 
   it('exposes profile token limits and locks them into the trusted workflow snapshot', async () => {

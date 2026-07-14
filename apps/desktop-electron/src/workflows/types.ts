@@ -152,6 +152,18 @@ export interface WorkflowRetryCommand {
   input_artifact_id?: string
 }
 
+export interface WorkflowResummarizeCommand {
+  source_workflow_id: string
+  expected_attempt_id: string
+  expected_sequence: number
+  input_artifact_id: string
+  summary: {
+    profile_id: string
+    profile_version: number
+    template: { id: string; version: number }
+  }
+}
+
 export interface ArtifactRevisionCommand {
   workflow_id: string
   expected_attempt_id: string

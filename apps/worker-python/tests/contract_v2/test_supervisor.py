@@ -50,6 +50,16 @@ class CountingSummaryGenerator:
         return {"kind": "final_summary_markdown", "text": f"summary-{self.calls}"}
 
 
+class CountingTranscriber:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def transcribe(self, spec: dict, attempt_id: str) -> dict:
+        del spec, attempt_id
+        self.calls += 1
+        return {"kind": "transcript_markdown", "path": "", "text": "stable transcript"}
+
+
 def make_draft(source: Path, name: str = "sample") -> dict:
     return {
         "draft_version": 2,
@@ -467,6 +477,66 @@ class SupervisorTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "OUTPUT_CONFLICT"):
                     await supervisor.submit(draft, operation_id="op_collision")
                 self.assertEqual(await supervisor.list(), [])
+                await supervisor.shutdown(interrupt=False)
+                registry.close()
+
+        asyncio.run(scenario())
+
+    def test_resummarize_creates_summary_only_workflow_from_transcript(self) -> None:
+        async def scenario() -> None:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                source = root / "source.wav"
+                source.write_bytes(b"audio")
+                registry = WorkflowRegistry(root / "registry.sqlite3")
+                transcriber = CountingTranscriber()
+                summary_generator = CountingSummaryGenerator()
+                supervisor = WorkflowSupervisor(
+                    registry,
+                    transcriber=transcriber,
+                    summary_generator=summary_generator,
+                    max_inflight=1,
+                )
+                draft = make_draft(source, "resummary")
+                draft["output"]["directory"] = str(root / "outputs")
+                submitted = await supervisor.submit(draft, operation_id="op_resummary_source")
+                await supervisor._queue.join()
+                original = await supervisor.get(submitted["snapshot"]["workflow_id"])
+                original_transcript = next(item for item in original["artifacts"] if item["kind"] == "transcript_markdown")
+                original_final = next(item for item in original["artifacts"] if item["kind"] == "final_summary_markdown")
+                source.unlink()
+
+                changed_summary = {**draft["summary"], "model": "summary-model-v2"}
+                changed_summary["template"] = {
+                    "id": "template-v2",
+                    "version": 1,
+                    "name": "action-items",
+                    "prompt_snapshot": "Extract action items.",
+                }
+                result = await supervisor.resummarize(
+                    {
+                        "source_workflow_id": original["workflow_id"],
+                        "expected_attempt_id": original["attempt"]["attempt_id"],
+                        "expected_sequence": original["sequence"],
+                        "input_artifact_id": original_transcript["artifact_id"],
+                        "summary": changed_summary,
+                    },
+                    operation_id="op_resummary_derived",
+                )
+                derived_id = result["snapshot"]["workflow_id"]
+                self.assertNotEqual(derived_id, original["workflow_id"])
+                await supervisor._queue.join()
+                derived = await supervisor.get(derived_id)
+                derived_transcript = next(item for item in derived["artifacts"] if item["kind"] == "transcript_markdown")
+                derived_final = next(item for item in derived["artifacts"] if item["kind"] == "final_summary_markdown")
+                self.assertEqual(transcriber.calls, 1)
+                self.assertEqual(summary_generator.calls, 2)
+                self.assertEqual(derived["spec"]["summary"]["model"], "summary-model-v2")
+                self.assertEqual(derived["spec"]["summary"]["template"]["prompt_snapshot"], "Extract action items.")
+                self.assertEqual(derived_transcript["derived_from_artifact_id"], original_transcript["artifact_id"])
+                self.assertNotEqual(derived_transcript["path"], original_transcript["path"])
+                self.assertEqual(Path(derived_final["path"]).read_text(encoding="utf-8"), "summary-2")
+                self.assertFalse(original_final["stale"])
                 await supervisor.shutdown(interrupt=False)
                 registry.close()
 

@@ -12,6 +12,7 @@ PROTOCOL = "asr-local-workflow"
 VERSION = 2
 PERSISTENT_OPERATION_METHODS = {
     "workflow.submit",
+    "workflow.resummarize",
     "workflow.control",
     "workflow.retry",
     "workflow.clear",
@@ -22,6 +23,7 @@ KNOWN_METHODS = {
     "runtime.capabilities",
     "prompt.preview",
     "workflow.submit",
+    "workflow.resummarize",
     "workflow.list",
     "workflow.get",
     "workflow.control",
@@ -266,6 +268,8 @@ def validate_envelope(message: dict[str, Any]) -> dict[str, Any]:
             message["params"]["draft"] = normalized
         elif method == "workflow.control":
             _validate_control_params(message["params"])
+        elif method == "workflow.resummarize":
+            _validate_resummarize_params(message["params"])
         elif method == "workflow.retry":
             _validate_retry_params(message["params"])
         elif method == "workflow.clear":
@@ -325,6 +329,19 @@ def _validate_control_params(params: dict[str, Any]) -> None:
     _string(params["expected_attempt_id"], "workflow.control.params.expected_attempt_id")
     if params["action"] not in {"pause", "resume", "cancel"}:
         raise _error("Unsupported control action.", "workflow.control.params.action")
+
+
+def _validate_resummarize_params(params: dict[str, Any]) -> None:
+    allowed = {"source_workflow_id", "expected_attempt_id", "expected_sequence", "input_artifact_id", "summary"}
+    _reject_unknown(params, allowed, "workflow.resummarize.params")
+    _require_keys(params, allowed, "workflow.resummarize.params")
+    for name in ("source_workflow_id", "expected_attempt_id", "input_artifact_id"):
+        _string(params[name], f"workflow.resummarize.params.{name}")
+    if not isinstance(params["expected_sequence"], int) or params["expected_sequence"] < 1:
+        raise _error("expected_sequence must be positive.", "workflow.resummarize.params.expected_sequence")
+    if not isinstance(params["summary"], dict):
+        raise _error("summary must be an object.", "workflow.resummarize.params.summary")
+    _validate_provider(params["summary"], "summary")
 
 
 def _validate_retry_params(params: dict[str, Any]) -> None:

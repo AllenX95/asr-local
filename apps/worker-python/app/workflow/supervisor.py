@@ -158,6 +158,74 @@ class WorkflowSupervisor:
             await self._enqueue(workflow_id, None)
         return result
 
+    async def resummarize(self, params: dict[str, Any], *, operation_id: str) -> dict[str, Any]:
+        """Create a new summary-only workflow from an existing transcript."""
+        await self.start()
+        digest = canonical_operation_digest("workflow.resummarize", params)
+        existing = self.registry.operation_result(operation_id, "workflow.resummarize", digest)
+        if existing is not None:
+            return {**existing, "deduplicated": True}
+
+        source = self.registry.get_snapshot(params["source_workflow_id"])
+        if source["status"] not in {"completed", "completed_with_warnings", "failed", "interrupted"}:
+            raise ValueError("WORKFLOW_NOT_TERMINAL")
+        if source["attempt"]["attempt_id"] != params["expected_attempt_id"]:
+            raise ValueError("STALE_ATTEMPT")
+        if source["sequence"] != params["expected_sequence"]:
+            raise ValueError("SEQUENCE_CONFLICT")
+
+        source_transcript = _select_transcript_artifact(source, params["input_artifact_id"])
+        if source_transcript is None:
+            raise ValueError("TRANSCRIPT_CHECKPOINT_MISSING: requested transcript is not readable")
+
+        workflow_id = self.id_factory("wf")
+        attempt_id = self.id_factory("att")
+        spec = json.loads(json.dumps(source["spec"]))
+        spec["display_name"] = f'{source["spec"].get("display_name", "meeting")}（再总结）'
+        spec["summary"] = json.loads(json.dumps(params["summary"]))
+        template_text = spec["summary"]["template"]["prompt_snapshot"]
+        spec["summary"]["template"]["sha256"] = hashlib.sha256(template_text.encode("utf-8")).hexdigest()
+        snapshot = create_initial_snapshot(workflow_id, attempt_id, spec, created_at=self.clock())
+        snapshot = _add_artifact(
+            snapshot,
+            {"kind": source_transcript["kind"], "text": source_transcript["text"]},
+            kind=source_transcript["kind"],
+            clock=self.clock(),
+        )
+        copied_transcript = snapshot["artifacts"][-1]
+        copied_transcript["derived_from_artifact_id"] = source_transcript["artifact_id"]
+        snapshot["recovery"] = {
+            "recommended_retry_stage": "summarizing",
+            "interrupted_attempt_id": None,
+            "input_artifact_id": copied_transcript["artifact_id"],
+        }
+        event = self._event(
+            snapshot,
+            "resummarize_submitted",
+            operation_id=operation_id,
+            data={
+                "source_workflow_id": source["workflow_id"],
+                "source_artifact_id": source_transcript["artifact_id"],
+                "input_artifact_id": copied_transcript["artifact_id"],
+            },
+        )
+        result, deduplicated = self.registry.create_workflow(
+            operation_id=operation_id,
+            method="workflow.resummarize",
+            payload_digest=digest,
+            workflow_id=workflow_id,
+            attempt_id=attempt_id,
+            snapshot=snapshot,
+            event=event,
+            now=self.clock(),
+        )
+        if not deduplicated:
+            self._control_events[workflow_id] = asyncio.Event()
+            self._control_events[workflow_id].set()
+            await self._publish(event)
+            await self._enqueue(workflow_id, "summarizing")
+        return result
+
     async def list(self, statuses: set[str] | None = None) -> list[dict[str, Any]]:
         return self.registry.list_snapshots(statuses)
 
@@ -384,7 +452,8 @@ class WorkflowSupervisor:
             "workflow_id": running["workflow_id"],
             "runtime_plan": running["runtime_plan"],
         }
-        _ensure_source_unchanged(execution_spec["source"])
+        if retry_stage not in {"summarizing", "writing_final"}:
+            _ensure_source_unchanged(execution_spec["source"])
         selected_transcript_id = running.get("recovery", {}).get("input_artifact_id")
         transcript_result: dict[str, Any] = {}
         if retry_stage in {"summarizing", "writing_final"}:

@@ -294,6 +294,39 @@ export class HostServices {
     return { summary_profiles: profiles, summary_templates: await this.loadTemplates() }
   }
 
+  async trustedSummaryRecipe(input: JsonObject): Promise<JsonObject> {
+    const profileId = String(input.profile_id ?? '').trim()
+    const profileVersion = Number(input.profile_version)
+    const templateInput = input.template as JsonObject | undefined
+    const templateId = String(templateInput?.id ?? '').trim()
+    const templateVersion = Number(templateInput?.version)
+    if (!profileId || !Number.isInteger(profileVersion) || profileVersion < 1 || !templateId || !Number.isInteger(templateVersion) || templateVersion < 1) {
+      throw new Error('INVALID_REQUEST: summary profile and template identities are required')
+    }
+    const raw = await readToml(path.join(this.configDir, 'summary_profiles.toml'), { profiles: [] })
+    const profile = (raw.profiles ?? [])
+      .map((item: JsonObject) => normalizedProfileRecord(item, 'summary-profile-'))
+      .find((item: JsonObject) => item.id === profileId && item.version === profileVersion)
+    if (!profile) throw new Error('SUMMARY_PROFILE_NOT_FOUND: trusted profile version is unavailable')
+    const template = (await this.loadTemplates()).find((item: JsonObject) => item.id === templateId && item.version === templateVersion)
+    if (!template) throw new Error('SUMMARY_TEMPLATE_NOT_FOUND: trusted template version is unavailable')
+    const authMode = profile.encrypted_api_key ? 'bearer' : 'none'
+    return {
+      profile_id: profile.id,
+      profile_version: profile.version,
+      base_url: String(profile.base_url ?? '').trim(),
+      auth_mode: authMode,
+      model: String(profile.model ?? '').trim(),
+      model_source: 'profile_default',
+      credential_ref: authMode === 'bearer' ? `summary:${profile.id}` : null,
+      provider_binding_sha256: providerBindingDigest(profile, authMode),
+      template: { id: template.id, version: template.version, name: template.name, prompt_snapshot: template.prompt },
+      context_strategy: 'auto',
+      input_token_budget: normalizeTokenLimit(profile.max_input_tokens, DEFAULT_SUMMARY_MAX_INPUT_TOKENS),
+      max_output_tokens: normalizeTokenLimit(profile.max_output_tokens, DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS),
+    }
+  }
+
   async trustedWorkflowDraft(input: JsonObject): Promise<JsonObject> {
     const draft = structuredClone(input)
     const requested = draft.summary ?? {}

@@ -8,6 +8,7 @@ import type {
   WorkflowEvent,
   RuntimeStatusEvent,
   WorkflowRetryCommand,
+  WorkflowResummarizeCommand,
   WorkflowSnapshot,
 } from './types'
 
@@ -25,6 +26,7 @@ export interface WorkflowRuntime {
   clear(workflowId: string): Promise<void>
   control(command: WorkflowControlCommand): Promise<WorkflowSnapshot>
   retry(command: WorkflowRetryCommand): Promise<WorkflowSnapshot>
+  resummarize(command: WorkflowResummarizeCommand): Promise<WorkflowSnapshot>
   registerRevision(command: ArtifactRevisionCommand): Promise<WorkflowSnapshot>
   subscribe(handler: WorkflowEventHandler): Unsubscribe
   subscribeRuntimeStatus(handler: RuntimeStatusHandler): Unsubscribe
