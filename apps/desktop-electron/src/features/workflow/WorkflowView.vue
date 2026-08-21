@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { ChevronDown, ChevronRight, Clock3, FolderOpen, Pause, Play, RefreshCw, RotateCcw, Square, Trash2 } from '@lucide/vue';
 import { api } from '../../ipc/desktopClient';
 import type { PipelineProfile, WorkflowCatalogs, WorkflowSummaryProfile, WorkflowSummaryTemplate } from '../../ipc/workerTypes';
@@ -8,6 +8,7 @@ import { useWorkflowStore } from '../../stores/workflowStore';
 import { taskControlActions } from '../../workflows/taskControls';
 import type { WorkflowDraft, WorkflowSnapshot } from '../../workflows/types';
 import { nextBaseNameForAudioSelection } from './workflowNaming';
+import { createTaskCenterState, toggleDiagnostics, toggleResummary } from './taskCenterState';
 
 const appStore = useAppStore();
 const workflowStore = useWorkflowStore();
@@ -34,8 +35,8 @@ const artifactSaving = ref(false);
 const refreshing = ref(false);
 const clearingWorkflowId = ref<string | null>(null);
 const recentExpanded = ref(true);
-const diagnosticsExpanded = ref(false);
-const resummaryOpen = ref(false);
+const recentVisibleCount = ref(6);
+const taskCenterState = reactive(createTaskCenterState());
 const resummaryProfileName = ref('');
 const resummaryTemplateName = ref('');
 const resummaryPrivacyConfirmed = ref(false);
@@ -99,11 +100,12 @@ watch(resummaryProfileName, () => {
 });
 const selectedWorkflow = computed<WorkflowSnapshot | null>(() => {
   const id = workflowStore.selectedWorkflowId;
-  return id ? workflowStore.workflowsById[id] ?? null : workflowStore.workflows[0] ?? null;
+  return id ? workflowStore.workflowsById[id] ?? null : null;
 });
 const activeStatuses = new Set(['queued', 'running', 'paused', 'waiting_for_secret']);
 const activeWorkflows = computed(() => workflowStore.workflows.filter((item) => activeStatuses.has(item.status)));
 const recentWorkflows = computed(() => workflowStore.workflows.filter((item) => !activeStatuses.has(item.status)));
+const visibleRecentWorkflows = computed(() => recentWorkflows.value.slice(0, recentVisibleCount.value));
 const runningCount = computed(() => activeWorkflows.value.filter((item) => ['running', 'paused', 'waiting_for_secret'].includes(item.status)).length);
 const queuedCount = computed(() => activeWorkflows.value.filter((item) => item.status === 'queued').length);
 
@@ -281,6 +283,14 @@ function canResummarize(snapshot: WorkflowSnapshot): boolean {
   return ['completed', 'completed_with_warnings'].includes(snapshot.status) && Boolean(latestTranscript(snapshot));
 }
 
+function selectTask(workflowId: string): void {
+  workflowStore.select(workflowStore.selectedWorkflowId === workflowId ? null : workflowId);
+}
+
+function showMoreRecent(): void {
+  recentVisibleCount.value += 12;
+}
+
 function openResummary(snapshot: WorkflowSnapshot): void {
   const summary = snapshot.spec.summary as Record<string, any>;
   const profile = availableProfiles.value.find((item) => item.id === summary.profile_id && item.version === summary.profile_version)
@@ -290,13 +300,13 @@ function openResummary(snapshot: WorkflowSnapshot): void {
   resummaryProfileName.value = profile?.name ?? '';
   resummaryTemplateName.value = template?.name ?? '';
   resummaryPrivacyConfirmed.value = false;
-  resummaryOpen.value = true;
+  toggleResummary(taskCenterState, snapshot.workflow_id, true);
   error.value = '';
 }
 
 function closeResummary(): void {
   if (resummarizing.value) return;
-  resummaryOpen.value = false;
+  if (selectedWorkflow.value) toggleResummary(taskCenterState, selectedWorkflow.value.workflow_id, false);
 }
 
 async function resummarize(): Promise<void> {
@@ -321,7 +331,7 @@ async function resummarize(): Promise<void> {
         template: { id: resummaryTemplate.value.id, version: resummaryTemplate.value.version },
       },
     });
-    resummaryOpen.value = false;
+    toggleResummary(taskCenterState, snapshot.workflow_id, false);
   } catch (reason) {
     error.value = String(reason);
   } finally {
@@ -330,7 +340,7 @@ async function resummarize(): Promise<void> {
 }
 
 async function clearWorkflow(snapshot: WorkflowSnapshot): Promise<void> {
-  if (!['completed', 'failed', 'cancelled', 'interrupted'].includes(snapshot.status)) return;
+  if (!['completed', 'completed_with_warnings', 'failed', 'cancelled', 'interrupted'].includes(snapshot.status)) return;
   if (!window.confirm(`清除“${snapshot.spec.display_name}”的任务记录？\n\n已生成的转录、总结和其他输出文件会保留。`)) return;
   clearingWorkflowId.value = snapshot.workflow_id;
   try {
@@ -597,7 +607,7 @@ function phaseLabel(value: string | null | undefined): string {
             class="task-item"
             :class="{ selected: selectedWorkflow?.workflow_id === snapshot.workflow_id }"
           >
-            <button class="task-row" type="button" @click="workflowStore.select(snapshot.workflow_id)">
+            <button class="task-row" type="button" @click="selectTask(snapshot.workflow_id)">
               <span class="task-identity">
                 <strong>{{ snapshot.spec.display_name }}</strong>
                 <small>{{ progressSummary(snapshot) }} · {{ updatedAt(snapshot) }}</small>
@@ -642,19 +652,25 @@ function phaseLabel(value: string | null | undefined): string {
             <ChevronDown v-if="recentExpanded" :size="16" />
             <ChevronRight v-else :size="16" />
           </button>
-          <ol v-if="recentExpanded" class="task-list recent">
-            <li v-for="snapshot in recentWorkflows.slice(0, 6)" :key="snapshot.workflow_id" class="task-item terminal" :class="{ selected: selectedWorkflow?.workflow_id === snapshot.workflow_id }">
-              <button class="task-row" type="button" @click="workflowStore.select(snapshot.workflow_id)">
-                <span class="task-identity"><strong>{{ snapshot.spec.display_name }}</strong><small>{{ updatedAt(snapshot) }}</small></span>
-                <span class="status-badge" :data-status="snapshot.status">{{ statusLabel(snapshot) }}</span>
-              </button>
-                <div v-if="selectedWorkflow?.workflow_id === snapshot.workflow_id" class="task-expanded terminal-detail">
+           <ol v-if="recentExpanded" class="task-list recent">
+              <li v-for="snapshot in visibleRecentWorkflows" :key="snapshot.workflow_id" class="task-item terminal" :class="{ selected: selectedWorkflow?.workflow_id === snapshot.workflow_id }">
+                <div class="task-row-shell">
+                  <button class="task-row" type="button" @click="selectTask(snapshot.workflow_id)">
+                   <span class="task-identity"><strong>{{ snapshot.spec.display_name }}</strong><small>{{ updatedAt(snapshot) }}</small></span>
+                   <span class="task-row-progress">
+                     <span class="status-badge" :data-status="snapshot.status">{{ statusLabel(snapshot) }}</span>
+                     <ChevronDown v-if="selectedWorkflow?.workflow_id === snapshot.workflow_id" :size="16" />
+                     <ChevronRight v-else :size="16" />
+                   </span>
+                 </button>
+                </div>
+                 <div v-if="selectedWorkflow?.workflow_id === snapshot.workflow_id" class="task-expanded terminal-detail">
                   <div class="terminal-actions">
                   <button v-if="['failed', 'completed', 'completed_with_warnings', 'interrupted'].includes(snapshot.status)" type="button" @click="retry"><RotateCcw :size="15" />重试</button>
                   <button v-if="canResummarize(snapshot)" type="button" @click="openResummary(snapshot)"><RotateCcw :size="15" />再总结</button>
                   <button class="clear-task" type="button" :disabled="clearingWorkflowId === snapshot.workflow_id" @click="clearWorkflow(snapshot)"><Trash2 :size="15" />{{ clearingWorkflowId === snapshot.workflow_id ? '清除中' : '清除记录' }}</button>
                 </div>
-                <div v-if="resummaryOpen && selectedWorkflow?.workflow_id === snapshot.workflow_id" class="resummary-panel">
+                 <div v-if="taskCenterState.resummaryWorkflowId === snapshot.workflow_id" class="resummary-panel">
                   <strong>使用已有 transcript 再总结</strong>
                   <label>
                     <span>总结模型 Profile</span>
@@ -684,10 +700,10 @@ function phaseLabel(value: string | null | undefined): string {
                     <button class="ghost" type="button" :disabled="resummarizing" @click="closeResummary">取消</button>
                   </div>
                 </div>
-                <button class="diagnostics-toggle" type="button" @click="diagnosticsExpanded = !diagnosticsExpanded">
-                  <span>产物与诊断信息</span><ChevronDown v-if="diagnosticsExpanded" :size="15" /><ChevronRight v-else :size="15" />
-                </button>
-                <div v-if="diagnosticsExpanded" class="diagnostics-content">
+                 <button class="diagnostics-toggle" type="button" @click="toggleDiagnostics(taskCenterState, snapshot.workflow_id)">
+                   <span>产物与诊断信息</span><ChevronDown v-if="taskCenterState.diagnosticsWorkflowId === snapshot.workflow_id" :size="15" /><ChevronRight v-else :size="15" />
+                 </button>
+                 <div v-if="taskCenterState.diagnosticsWorkflowId === snapshot.workflow_id" class="diagnostics-content">
                   <div v-if="visibleArtifacts(snapshot).length" class="artifact-list">
                     <div v-for="artifact in visibleArtifacts(snapshot)" :key="artifact.artifact_id">
                       <strong>{{ artifact.kind }}</strong><span>{{ artifact.path }}{{ artifact.stale ? ' · 已过期' : '' }}</span><button type="button" @click="editArtifact(artifact.artifact_id)">编辑</button>
@@ -703,8 +719,11 @@ function phaseLabel(value: string | null | undefined): string {
                   <div class="workflow-actions"><button type="button" :disabled="artifactSaving" @click="saveArtifactRevision">{{ artifactSaving ? '保存中' : '保存为新版本' }}</button><button class="ghost" type="button" @click="editingArtifactId = null">取消</button></div>
                 </div>
               </div>
-            </li>
-          </ol>
+              </li>
+            </ol>
+            <button v-if="recentExpanded && visibleRecentWorkflows.length < recentWorkflows.length" class="ghost recent-more" type="button" @click="showMoreRecent">
+              显示更多（再加载 12 条）
+            </button>
         </section>
       </div>
     </aside>

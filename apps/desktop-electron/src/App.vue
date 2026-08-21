@@ -16,7 +16,8 @@ const currentView = computed(() => {
   switch (store.activeView) {
     case 'workflow':
       return WorkflowView;
-    case 'markdown':
+    case 'transcript':
+    case 'summary':
       return MarkdownView;
     case 'history':
       return HistoryView;
@@ -39,7 +40,11 @@ onMounted(() => {
   <div class="app-shell">
     <NavRail />
     <main class="main-surface">
-      <component :is="currentView" />
+      <MarkdownView
+        v-if="store.activeView === 'transcript' || store.activeView === 'summary'"
+        :mode="store.activeView"
+      />
+      <component v-else :is="currentView" />
     </main>
     <footer class="status-bar" :class="{ danger: Boolean(store.error) }">
       <strong>{{ store.statusTitle }}</strong>

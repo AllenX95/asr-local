@@ -81,15 +81,15 @@ export const useAppStore = defineStore('app', {
     setStatus(title: string, detail = '') { this.statusTitle = title; this.statusDetail = detail; this.error = ''; },
     setError(title: string, detail: unknown) { this.statusTitle = title; this.statusDetail = String(detail); this.error = String(detail); },
 
-    async openMarkdownFile() {
+    async openMarkdownFile(view: 'transcript' | 'summary' = 'summary') {
       const filePath = await api.selectMarkdownFile();
-      if (filePath) await this.loadMarkdownPath(filePath);
+      if (filePath) await this.loadMarkdownPath(filePath, true, view);
     },
-    async loadMarkdownPath(filePath: string, activateView = true) {
+    async loadMarkdownPath(filePath: string, activateView = true, view: 'transcript' | 'summary' = 'summary') {
       try {
         const file = await api.readTextFile(filePath);
         this.setMarkdown(file.path, file.content, true);
-        if (activateView) this.activeView = 'markdown';
+        if (activateView) this.activeView = view;
       } catch (error) { this.setError('Markdown 打开失败', error); }
     },
     setMarkdown(filePath: string, content: string, markSaved = false) {
