@@ -30,6 +30,7 @@ const summaryTemplateName = ref('');
 const summaryPrivacyConfirmed = ref(false);
 const summaryGenerating = ref(false);
 const summaryError = ref('');
+const summaryOutboundScope = '转录文本和原有参考速记（如有）';
 let previewTimer: number | undefined;
 
 const mode = computed(() => props.mode);
@@ -81,7 +82,7 @@ const availableTemplates = computed<WorkflowSummaryTemplate[]>(() => {
 const selectedProfile = computed(() => availableProfiles.value.find((profile) => profile.name === summaryProfileName.value) ?? null);
 const selectedTemplate = computed(() => availableTemplates.value.find((template) => template.name === summaryTemplateName.value) ?? null);
 const providerAuthorizationText = computed(() => selectedProfile.value
-  ? `总结文本将发送到 ${selectedProfile.value.base_url}，使用模型 ${selectedProfile.value.model}。`
+  ? `${summaryOutboundScope}将发送到 ${selectedProfile.value.base_url}，使用模型 ${selectedProfile.value.model}。`
   : '');
 
 watch(artifactOptions, (options) => {
@@ -165,7 +166,7 @@ async function generateSummary(): Promise<void> {
     return;
   }
   if (!summaryPrivacyConfirmed.value) {
-    summaryError.value = '请确认转录文本将发送到所选总结服务后再开始生成。';
+    summaryError.value = `请确认${summaryOutboundScope}将发送到所选总结服务后再开始生成。`;
     return;
   }
   summaryGenerating.value = true;
@@ -270,7 +271,7 @@ const renderedHtml = computed(() =>
         <p>{{ providerAuthorizationText }}</p>
         <label class="checkbox-row">
           <input v-model="summaryPrivacyConfirmed" type="checkbox" />
-          <span>我确认已了解上述 provider、模型和转录文本出站范围，并授权本次总结。</span>
+          <span>我确认已了解上述 provider、模型，以及{{ summaryOutboundScope }}的出站范围，并授权本次总结。</span>
         </label>
       </div>
       <p v-if="summaryError" class="workflow-error">{{ summaryError }}</p>
