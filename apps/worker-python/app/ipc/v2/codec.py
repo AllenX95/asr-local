@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from typing import Any
 
@@ -8,6 +9,7 @@ from .canonical import normalize_json
 from .errors import ProtocolError
 
 MAX_MESSAGE_BYTES = 1024 * 1024
+MAX_REFERENCE_DOCUMENT_BYTES = 256 * 1024
 PROTOCOL = "asr-local-workflow"
 VERSION = 2
 PERSISTENT_OPERATION_METHODS = {
@@ -200,11 +202,12 @@ def _validate_provider(provider: Any, field: str) -> None:
     if not isinstance(provider, dict):
         raise _error("provider must be an object.", field)
     required = {"profile_id", "profile_version", "base_url", "auth_mode", "model", "credential_ref", "provider_binding_sha256"}
-    allowed = required
+    allowed = set(required)
     if field == "summary":
-        allowed = required | {"model_source", "template", "context_strategy", "input_token_budget", "max_output_tokens"}
+        allowed |= {"model_source", "template", "context_strategy", "input_token_budget", "max_output_tokens", "reference_document"}
     _reject_unknown(provider, allowed, field)
-    _require_keys(provider, allowed if field == "summary" else required, field)
+    required_fields = required if field != "summary" else required | {"model_source", "template", "context_strategy", "input_token_budget", "max_output_tokens"}
+    _require_keys(provider, required_fields, field)
     _string(provider["profile_id"], f"{field}.profile_id")
     if not isinstance(provider["profile_version"], int) or provider["profile_version"] < 1:
         raise _error("profile_version must be a positive integer.", f"{field}.profile_version")
@@ -233,6 +236,33 @@ def _validate_provider(provider: Any, field: str) -> None:
         for name in ("input_token_budget", "max_output_tokens"):
             if not isinstance(provider[name], int) or provider[name] < 1:
                 raise _error(f"{name} must be a positive integer.", f"summary.{name}")
+        if "reference_document" in provider and provider["reference_document"] is not None:
+            _validate_reference_document(provider["reference_document"], "summary.reference_document")
+
+
+def _validate_reference_document(value: Any, field: str) -> None:
+    if not isinstance(value, dict):
+        raise _error(f"{field} must be an object or null.", field)
+    allowed = {"name", "content", "size_bytes", "sha256"}
+    _reject_unknown(value, allowed, field)
+    _require_keys(value, allowed, field)
+    name = _string(value["name"], f"{field}.name").strip()
+    if len(name) > 255 or "/" in name or "\\" in name or not name.lower().endswith((".md", ".markdown")):
+        raise _error(f"{field}.name must be a Markdown filename.", f"{field}.name")
+    content = _string(value["content"], f"{field}.content", allow_empty=False)
+    if len(content.encode("utf-8")) > MAX_REFERENCE_DOCUMENT_BYTES:
+        raise _error(f"{field}.content exceeds the {MAX_REFERENCE_DOCUMENT_BYTES}-byte limit.", f"{field}.content")
+    size_bytes = value["size_bytes"]
+    if not isinstance(size_bytes, int) or isinstance(size_bytes, bool) or size_bytes < 1 or size_bytes > MAX_REFERENCE_DOCUMENT_BYTES:
+        raise _error(f"{field}.size_bytes is invalid.", f"{field}.size_bytes")
+    actual_size = len(content.encode("utf-8"))
+    if size_bytes != actual_size:
+        raise _error(f"{field}.size_bytes does not match content.", f"{field}.size_bytes")
+    sha256 = _string(value["sha256"], f"{field}.sha256").lower()
+    if len(sha256) != 64 or any(character not in "0123456789abcdef" for character in sha256):
+        raise _error(f"{field}.sha256 must be a SHA-256 hex digest.", f"{field}.sha256")
+    if hashlib.sha256(content.encode("utf-8")).hexdigest() != sha256:
+        raise _error(f"{field}.sha256 does not match content.", f"{field}.sha256")
 
 
 def validate_envelope(message: dict[str, Any]) -> dict[str, Any]:

@@ -183,6 +183,11 @@ class WorkflowSupervisor:
         spec = json.loads(json.dumps(source["spec"]))
         spec["display_name"] = f'{source["spec"].get("display_name", "meeting")}（再总结）'
         spec["summary"] = json.loads(json.dumps(params["summary"]))
+        # A resummarize recipe from older renderers does not carry reference
+        # material. Preserve the original immutable snapshot in that case;
+        # an explicit null remains an intentional clear operation.
+        if "reference_document" not in params["summary"] and "reference_document" in source["spec"].get("summary", {}):
+            spec["summary"]["reference_document"] = json.loads(json.dumps(source["spec"]["summary"]["reference_document"]))
         template_text = spec["summary"]["template"]["prompt_snapshot"]
         spec["summary"]["template"]["sha256"] = hashlib.sha256(template_text.encode("utf-8")).hexdigest()
         snapshot = create_initial_snapshot(workflow_id, attempt_id, spec, created_at=self.clock())
