@@ -14,6 +14,7 @@ const TOML = (existsSync(vendorTomlPath) ? require(vendorTomlPath) : require('@i
 type JsonObject = Record<string, any>
 const DEFAULT_SUMMARY_MAX_INPUT_TOKENS = 8000
 const DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS = 2000
+const SUMMARY_TEMPLATE_CATALOG_VERSION = 4
 export const MAX_REFERENCE_DOCUMENT_BYTES = 256 * 1024
 
 export interface ReferenceDocumentSnapshot {
@@ -129,8 +130,26 @@ async function writeToml(filePath: string, value: JsonObject): Promise<void> {
 }
 
 function stableId(prefix: string, name: string): string {
-  const slug = name.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'legacy'
-  return `${prefix}${slug}`
+  const normalized = name.trim().toLowerCase()
+  const slug = normalized.replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
+  if (slug) return `${prefix}${slug}`
+  const digest = createHash('sha256').update(normalized || name).digest('hex').slice(0, 12)
+  return `${prefix}legacy-${digest}`
+}
+
+function normalizedTemplateName(value: unknown): string {
+  return String(value ?? '').trim().toLocaleLowerCase()
+}
+
+function catalogVersion(raw: JsonObject): number {
+  const parsed = Number(raw.catalog_version ?? raw.template_catalog_version ?? 1)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 1
+}
+
+function canonicalTemplateRoot(raw: JsonObject, templates: JsonObject[], version: number): JsonObject {
+  const next: JsonObject = { ...raw, templates, catalog_version: version }
+  delete next.template_catalog_version
+  return next
 }
 
 function providerBindingDigest(profile: JsonObject, authMode: string): string {
@@ -189,12 +208,6 @@ export class HostServices {
   async initialize(): Promise<void> {
     await mkdir(this.configDir, { recursive: true })
     await mkdir(this.outputsRoot, { recursive: true })
-    const defaultsDir = path.join(this.projectRoot, 'config')
-    for (const name of ['models.toml', 'summary_templates.toml']) {
-      const target = path.join(this.configDir, name)
-      const source = path.join(defaultsDir, name)
-      if (!existsSync(target) && existsSync(source) && target !== source) await copyFile(source, target)
-    }
     if (this.legacyConfigDir && path.resolve(this.legacyConfigDir) !== path.resolve(this.configDir)) {
       for (const name of ['models.toml', 'summary_templates.toml', 'asr_profiles.toml', 'summary_profiles.toml']) {
         const source = path.join(this.legacyConfigDir, name)
@@ -203,8 +216,55 @@ export class HostServices {
       }
       await this.migrateLegacyModelPaths()
     }
+    const defaultsDir = path.join(this.projectRoot, 'config')
+    for (const name of ['models.toml', 'summary_templates.toml']) {
+      const target = path.join(this.configDir, name)
+      const source = path.join(defaultsDir, name)
+      if (!existsSync(target) && existsSync(source) && path.resolve(target) !== path.resolve(source)) await copyFile(source, target)
+    }
+    await this.migrateSummaryTemplates(defaultsDir)
     await this.migrateLegacySecrets('asr_profiles.toml')
     await this.migrateLegacySecrets('summary_profiles.toml')
+  }
+
+  private async migrateSummaryTemplates(defaultsDir: string): Promise<void> {
+    const sourcePath = path.join(defaultsDir, 'summary_templates.toml')
+    const targetPath = path.join(this.configDir, 'summary_templates.toml')
+    if (path.resolve(sourcePath) === path.resolve(targetPath) || !existsSync(sourcePath) || !existsSync(targetPath)) return
+
+    const source = await readToml(sourcePath, { templates: [], catalog_version: SUMMARY_TEMPLATE_CATALOG_VERSION })
+    const target = await readToml(targetPath, { templates: [], catalog_version: 1 })
+    const sourceVersion = catalogVersion(source)
+    const targetVersion = catalogVersion(target)
+    const needsUpgrade = sourceVersion > targetVersion
+    const needsCanonicalize = Object.prototype.hasOwnProperty.call(target, 'template_catalog_version')
+      || !Object.prototype.hasOwnProperty.call(target, 'catalog_version')
+    if (!needsUpgrade && !needsCanonicalize) return
+
+    const sourceTemplates = Array.isArray(source.templates) ? source.templates as JsonObject[] : []
+    const targetTemplates = Array.isArray(target.templates) ? target.templates as JsonObject[] : []
+    const matchedTargetIndexes = new Set<number>()
+    const migrated = needsUpgrade ? sourceTemplates.map((item) => {
+      const sourceId = String(item.id ?? '').trim()
+      let index = sourceId
+        ? targetTemplates.findIndex((candidate, candidateIndex) => !matchedTargetIndexes.has(candidateIndex) && String(candidate.id ?? '').trim() === sourceId)
+        : -1
+      if (index < 0) {
+        const name = normalizedTemplateName(item.name)
+        index = targetTemplates.findIndex((candidate, candidateIndex) => !matchedTargetIndexes.has(candidateIndex) && normalizedTemplateName(candidate.name) === name)
+      }
+      if (index >= 0) {
+        matchedTargetIndexes.add(index)
+        return { ...targetTemplates[index], ...item }
+      }
+      return { ...item }
+    }) : targetTemplates
+    const customTemplates = targetTemplates.filter((_, index) => !matchedTargetIndexes.has(index))
+    const migratedTemplates = needsUpgrade ? [...migrated, ...customTemplates] : targetTemplates
+    const nextVersion = Math.max(sourceVersion, targetVersion)
+    const backupPath = `${targetPath}.pre-catalog-v${sourceVersion}.bak`
+    if (!existsSync(backupPath)) await copyFile(targetPath, backupPath)
+    await writeToml(targetPath, canonicalTemplateRoot(target, migratedTemplates, nextVersion))
   }
 
   private async migrateLegacyModelPaths(): Promise<void> {
@@ -372,16 +432,17 @@ export class HostServices {
 
   async saveTemplate(nameInput: string, promptInput: string): Promise<JsonObject[]> {
     const name = nameInput.trim(); if (!name) throw new Error('template name is empty')
-    const filePath = path.join(this.configDir, 'summary_templates.toml'); const raw = await readToml(filePath, { templates: [] }); const templates = raw.templates as JsonObject[]
+    const filePath = path.join(this.configDir, 'summary_templates.toml'); const raw = await readToml(filePath, { templates: [], catalog_version: SUMMARY_TEMPLATE_CATALOG_VERSION }); const templates = Array.isArray(raw.templates) ? raw.templates as JsonObject[] : []
     const index = templates.findIndex((item) => String(item.name).toLowerCase() === name.toLowerCase()); const previous = index >= 0 ? templates[index] : null
     const next = { id: previous?.id || stableId('summary-template-', name), version: previous ? Math.max(Number(previous.version ?? 1), 1) + 1 : 1, name, prompt: promptInput.trim() }
     if (index >= 0) templates[index] = next; else templates.push(next); templates.sort((a, b) => String(a.name).localeCompare(String(b.name)))
-    await writeToml(filePath, { templates }); return this.loadTemplates()
+    await writeToml(filePath, canonicalTemplateRoot(raw, templates, Math.max(catalogVersion(raw), SUMMARY_TEMPLATE_CATALOG_VERSION))); return this.loadTemplates()
   }
 
   async deleteTemplate(nameInput: string): Promise<JsonObject[]> {
-    const filePath = path.join(this.configDir, 'summary_templates.toml'); const raw = await readToml(filePath, { templates: [] }); const name = nameInput.trim().toLowerCase()
-    raw.templates = (raw.templates ?? []).filter((item: JsonObject) => String(item.name).toLowerCase() !== name); await writeToml(filePath, raw); return this.loadTemplates()
+    const filePath = path.join(this.configDir, 'summary_templates.toml'); const raw = await readToml(filePath, { templates: [], catalog_version: SUMMARY_TEMPLATE_CATALOG_VERSION }); const name = nameInput.trim().toLowerCase()
+    const templates = (raw.templates ?? []).filter((item: JsonObject) => String(item.name).toLowerCase() !== name)
+    await writeToml(filePath, canonicalTemplateRoot(raw, templates, Math.max(catalogVersion(raw), SUMMARY_TEMPLATE_CATALOG_VERSION))); return this.loadTemplates()
   }
 
   async catalogs(): Promise<JsonObject> {

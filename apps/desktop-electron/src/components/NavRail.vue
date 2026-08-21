@@ -7,7 +7,8 @@ const store = useAppStore();
 
 const items: Array<{ key: ViewKey; label: string; icon: typeof FileText }> = [
   { key: 'workflow', label: '一键工作流', icon: Zap },
-  { key: 'markdown', label: 'Markdown', icon: FileText },
+  { key: 'transcript', label: '转录 Markdown', icon: FileText },
+  { key: 'summary', label: '总结 Markdown', icon: FileText },
   { key: 'history', label: '历史', icon: History },
   { key: 'settings', label: '设置', icon: Settings }
 ];

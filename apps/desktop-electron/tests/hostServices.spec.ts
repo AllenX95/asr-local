@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -15,6 +15,142 @@ vi.mock('electron', () => ({
 import { HostServices, MAX_REFERENCE_DOCUMENT_BYTES, freezeReferenceDocumentRequest, readReferenceDocumentSnapshot } from '../electron/hostServices.js'
 
 describe('HostServices trusted workflow draft', () => {
+  it('migrates catalog v2 to v4 with id priority, name fallback, custom preservation, backup, and idempotence', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'asr-local-template-migration-'))
+    const defaultsDir = path.join(root, 'config')
+    const userConfigDir = path.join(root, 'user-config')
+    await mkdir(defaultsDir)
+    await mkdir(userConfigDir)
+    await writeFile(path.join(defaultsDir, 'summary_templates.toml'), [
+      'catalog_version = 4',
+      '',
+      '[[templates]]',
+      'id = "summary-template-general"',
+      'version = 4',
+      'name = "通用模板"',
+      'prompt = "bundled general"',
+      '',
+      '[[templates]]',
+      'id = "summary-template-customer"',
+      'version = 4',
+      'name = "客户访谈"',
+      'prompt = "bundled customer"',
+      '',
+    ].join('\n'))
+    await writeFile(path.join(userConfigDir, 'summary_templates.toml'), [
+      'catalog_version = 2',
+      'owner = "keep"',
+      '',
+      '[[templates]]',
+      'id = "summary-template-legacy"',
+      'version = 2',
+      'name = "通用模板"',
+      'prompt = "legacy general"',
+      '',
+      '[[templates]]',
+      'id = "summary-template-customer"',
+      'version = 1',
+      'name = "旧名称"',
+      'prompt = "legacy customer"',
+      '',
+      '[[templates]]',
+      'id = "custom-template"',
+      'version = 7',
+      'name = "自定义模板"',
+      'prompt = "custom prompt"',
+      '',
+    ].join('\n'))
+
+    const host = new HostServices(root, userConfigDir, path.join(root, 'outputs'))
+    await host.initialize()
+
+    await expect(host.loadTemplates()).resolves.toEqual([
+      { id: 'summary-template-general', version: 4, name: '通用模板', prompt: 'bundled general' },
+      { id: 'summary-template-customer', version: 4, name: '客户访谈', prompt: 'bundled customer' },
+      { id: 'custom-template', version: 7, name: '自定义模板', prompt: 'custom prompt' },
+    ])
+    const migratedPath = path.join(userConfigDir, 'summary_templates.toml')
+    const migratedText = await readFile(migratedPath, 'utf8')
+    expect(migratedText).toContain('catalog_version = 4')
+    expect(migratedText).toContain('owner = "keep"')
+    expect(migratedText).not.toContain('template_catalog_version')
+    const backupText = await readFile(`${migratedPath}.pre-catalog-v4.bak`, 'utf8')
+    expect(backupText).toContain('catalog_version = 2')
+
+    await host.initialize()
+    await expect(readFile(migratedPath, 'utf8')).resolves.toBe(migratedText)
+    await expect(readFile(`${migratedPath}.pre-catalog-v4.bak`, 'utf8')).resolves.toBe(backupText)
+  })
+
+  it('does not downgrade a newer user catalog', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'asr-local-template-no-downgrade-'))
+    const defaultsDir = path.join(root, 'config')
+    const userConfigDir = path.join(root, 'user-config')
+    await mkdir(defaultsDir)
+    await mkdir(userConfigDir)
+    await writeFile(path.join(defaultsDir, 'summary_templates.toml'), 'catalog_version = 4\n[[templates]]\nid = "builtin"\nversion = 4\nname = "内置"\nprompt = "bundled"\n')
+    await writeFile(path.join(userConfigDir, 'summary_templates.toml'), 'catalog_version = 5\n[[templates]]\nid = "builtin"\nversion = 5\nname = "内置"\nprompt = "user newer"\n')
+
+    const host = new HostServices(root, userConfigDir, path.join(root, 'outputs'))
+    await host.initialize()
+
+    await expect(host.loadTemplates()).resolves.toEqual([{ id: 'builtin', version: 5, name: '内置', prompt: 'user newer' }])
+    await expect(readFile(path.join(userConfigDir, 'summary_templates.toml'), 'utf8')).resolves.toContain('catalog_version = 5')
+  })
+
+  it('generates non-colliding ids for pure Chinese template names', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'asr-local-template-chinese-'))
+    const configDir = path.join(root, 'config')
+    await mkdir(configDir)
+    await writeFile(path.join(configDir, 'summary_templates.toml'), [
+      'catalog_version = 4', '',
+      '[[templates]]', 'name = "团队访谈"', 'prompt = "一"', '',
+      '[[templates]]', 'name = "客户访谈"', 'prompt = "二"', '',
+      '[[templates]]', 'name = "通用模板"', 'prompt = "三"', '',
+      '[[templates]]', 'name = "首次交流模板"', 'prompt = "四"', '',
+    ].join('\n'))
+
+    const templates = await new HostServices(root, configDir, path.join(root, 'outputs')).loadTemplates()
+    expect(new Set(templates.map((template) => template.id)).size).toBe(4)
+  })
+
+  it('copies legacy config before bundled defaults and then upgrades the copied catalog', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'asr-local-template-legacy-order-'))
+    const defaultsDir = path.join(root, 'config')
+    const legacyDir = path.join(root, 'legacy-config')
+    const userConfigDir = path.join(root, 'user-config')
+    await mkdir(defaultsDir)
+    await mkdir(legacyDir)
+    await mkdir(userConfigDir)
+    await writeFile(path.join(defaultsDir, 'summary_templates.toml'), 'catalog_version = 4\n[[templates]]\nid = "builtin"\nversion = 4\nname = "通用模板"\nprompt = "bundled"\n')
+    await writeFile(path.join(legacyDir, 'summary_templates.toml'), 'template_catalog_version = 2\n[[templates]]\nid = "old"\nversion = 2\nname = "通用模板"\nprompt = "legacy"\n')
+
+    const host = new HostServices(root, userConfigDir, path.join(root, 'outputs'), legacyDir)
+    await host.initialize()
+
+    await expect(host.loadTemplates()).resolves.toEqual([{ id: 'builtin', version: 4, name: '通用模板', prompt: 'bundled' }])
+  })
+
+  it('preserves catalog metadata when saving and deleting templates', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'asr-local-template-metadata-'))
+    const configDir = path.join(root, 'config')
+    await mkdir(configDir)
+    const filePath = path.join(configDir, 'summary_templates.toml')
+    await writeFile(filePath, 'catalog_version = 4\nowner = "keep"\n[[templates]]\nid = "one"\nversion = 4\nname = "旧模板"\nprompt = "旧"\n')
+    const host = new HostServices(root, configDir, path.join(root, 'outputs'))
+
+    await host.saveTemplate('新模板', '新 prompt')
+    const saved = await readFile(filePath, 'utf8')
+    expect(saved).toContain('catalog_version = 4')
+    expect(saved).toContain('owner = "keep"')
+    expect(saved).not.toContain('template_catalog_version')
+
+    await host.deleteTemplate('旧模板')
+    const deleted = await readFile(filePath, 'utf8')
+    expect(deleted).toContain('catalog_version = 4')
+    expect(deleted).toContain('owner = "keep"')
+  })
+
   it('freezes a granted Markdown file as a UTF-8, size and SHA-256 snapshot', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'asr-local-reference-snapshot-'))
     const filePath = path.join(root, 'notes.md')

@@ -13,6 +13,7 @@ apps/desktop-electron/dist/
 apps/desktop-electron/dist-electron/
 apps/desktop-electron/release-electron/
 apps/desktop-electron/runtime/
+/.mimocode/
 /tmp_rust_check*
 /rmeta*/
 /rustc*/

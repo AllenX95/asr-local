@@ -1,4 +1,4 @@
-export type ViewKey = 'workflow' | 'markdown' | 'history' | 'settings';
+export type ViewKey = 'workflow' | 'transcript' | 'summary' | 'history' | 'settings';
 export type PipelineProfile = 'pyannote_qwen3_asr' | 'cloud_asr';
 
 export interface AsrCloudProfile {
@@ -109,14 +109,6 @@ export interface WorkflowSummaryTemplate {
 export interface WorkflowCatalogs {
   summary_profiles: WorkflowSummaryProfile[];
   summary_templates: WorkflowSummaryTemplate[];
-}
-
-export interface SummaryRequest {
-  base_url: string;
-  api_key: string;
-  model: string;
-  prompt: string;
-  transcript_markdown: string;
 }
 
 export interface HistoryItem {
