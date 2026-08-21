@@ -27,6 +27,17 @@
     },
     "context_strategy": { "enum": ["auto", "single_pass", "hierarchical"] },
     "input_token_budget": { "type": "integer", "minimum": 1 },
-    "max_output_tokens": { "type": "integer", "minimum": 1 }
+    "max_output_tokens": { "type": "integer", "minimum": 1 },
+    "reference_document": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["name", "content", "size_bytes", "sha256"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "\\.(?:[mM][dD]|[mM][aA][rR][kK][dD][oO][wW][nN])$" },
+        "content": { "type": "string", "minLength": 1, "maxLength": 262144 },
+        "size_bytes": { "type": "integer", "minimum": 1, "maximum": 262144 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" }
+      }
+    }
   }
 }

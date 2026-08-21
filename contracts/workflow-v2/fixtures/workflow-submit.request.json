@@ -44,7 +44,13 @@
         },
         "context_strategy": "auto",
         "input_token_budget": 100000,
-        "max_output_tokens": 8192
+        "max_output_tokens": 8192,
+        "reference_document": {
+          "name": "meeting-notes.md",
+          "content": "# notes\n会议决定采用 Orion。",
+          "size_bytes": 35,
+          "sha256": "c4cd4a30f32a1fe46c918b1127184d66d025a26eeac29ab70dfa67020bafa474"
+        }
       },
       "output": {
         "directory": "D:\\outputs",

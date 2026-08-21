@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
@@ -417,7 +418,15 @@ class SupervisorTests(unittest.TestCase):
                     summary_generator=summary_generator,
                     max_inflight=1,
                 )
-                submitted = await supervisor.submit(make_draft(source, "retryable"), operation_id="op_retryable")
+                retry_draft = make_draft(source, "retryable")
+                retry_content = "retry notes"
+                retry_draft["summary"]["reference_document"] = {
+                    "name": "retry.md",
+                    "content": retry_content,
+                    "size_bytes": len(retry_content.encode("utf-8")),
+                    "sha256": hashlib.sha256(retry_content.encode("utf-8")).hexdigest(),
+                }
+                submitted = await supervisor.submit(retry_draft, operation_id="op_retryable")
                 await supervisor._queue.join()
                 first = await supervisor.get(submitted["snapshot"]["workflow_id"])
                 first_transcript = next(item for item in first["artifacts"] if item["kind"] == "transcript_markdown")
@@ -434,6 +443,7 @@ class SupervisorTests(unittest.TestCase):
                 )
                 await supervisor._queue.join()
                 second = await supervisor.get(first["workflow_id"])
+                self.assertEqual(second["spec"]["summary"]["reference_document"], first["spec"]["summary"]["reference_document"])
                 second_final = max((item for item in second["artifacts"] if item["kind"] == "final_summary_markdown"), key=lambda item: item["revision"])
                 self.assertEqual(summary_generator.calls, 2)
                 self.assertEqual(second_final["revision"], 2)
@@ -499,6 +509,13 @@ class SupervisorTests(unittest.TestCase):
                 )
                 draft = make_draft(source, "resummary")
                 draft["output"]["directory"] = str(root / "outputs")
+                reference_content = "# 速记\n项目代号 Orion。"
+                draft["summary"]["reference_document"] = {
+                    "name": "notes.md",
+                    "content": reference_content,
+                    "size_bytes": len(reference_content.encode("utf-8")),
+                    "sha256": hashlib.sha256(reference_content.encode("utf-8")).hexdigest(),
+                }
                 submitted = await supervisor.submit(draft, operation_id="op_resummary_source")
                 await supervisor._queue.join()
                 original = await supervisor.get(submitted["snapshot"]["workflow_id"])
@@ -532,6 +549,7 @@ class SupervisorTests(unittest.TestCase):
                 self.assertEqual(transcriber.calls, 1)
                 self.assertEqual(summary_generator.calls, 2)
                 self.assertEqual(derived["spec"]["summary"]["model"], "summary-model-v2")
+                self.assertEqual(derived["spec"]["summary"]["reference_document"], draft["summary"]["reference_document"])
                 self.assertEqual(derived["spec"]["summary"]["template"]["prompt_snapshot"], "Extract action items.")
                 self.assertEqual(derived_transcript["derived_from_artifact_id"], original_transcript["artifact_id"])
                 self.assertNotEqual(derived_transcript["path"], original_transcript["path"])

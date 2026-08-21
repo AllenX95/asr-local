@@ -1,6 +1,6 @@
 import { safeStorage } from 'electron'
 import { existsSync } from 'node:fs'
-import { copyFile, mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises'
+import { copyFile, lstat, mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
@@ -14,6 +14,101 @@ const TOML = (existsSync(vendorTomlPath) ? require(vendorTomlPath) : require('@i
 type JsonObject = Record<string, any>
 const DEFAULT_SUMMARY_MAX_INPUT_TOKENS = 8000
 const DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS = 2000
+export const MAX_REFERENCE_DOCUMENT_BYTES = 256 * 1024
+
+export interface ReferenceDocumentSnapshot {
+  name: string
+  content: string
+  size_bytes: number
+  sha256: string
+}
+
+function validateReferenceDocumentSnapshot(value: unknown): ReferenceDocumentSnapshot {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('INVALID_REQUEST: reference_document must be an object or null')
+  }
+  const input = value as Record<string, unknown>
+  if (Object.prototype.hasOwnProperty.call(input, 'path')) {
+    throw new Error('INVALID_REQUEST: reference_document must be frozen by the desktop host')
+  }
+  const name = typeof input.name === 'string' ? input.name.trim() : ''
+  const content = typeof input.content === 'string' ? input.content : null
+  const sizeBytes = input.size_bytes
+  const sha256 = typeof input.sha256 === 'string' ? input.sha256.toLowerCase() : ''
+  if (!name || name.includes('/') || name.includes('\\') || !content || !Number.isInteger(sizeBytes) || Number(sizeBytes) < 1 || Number(sizeBytes) > MAX_REFERENCE_DOCUMENT_BYTES || !/^[a-f0-9]{64}$/u.test(sha256)) {
+    throw new Error('INVALID_REQUEST: reference_document snapshot is invalid')
+  }
+  if (!/\.(?:md|markdown)$/iu.test(name)) {
+    throw new Error('INVALID_REQUEST: reference_document must be Markdown')
+  }
+  const actualSize = Buffer.byteLength(content, 'utf8')
+  if (actualSize !== sizeBytes) {
+    throw new Error('INVALID_REQUEST: reference_document size does not match content')
+  }
+  if (createHash('sha256').update(content, 'utf8').digest('hex') !== sha256) {
+    throw new Error('INVALID_REQUEST: reference_document sha256 does not match content')
+  }
+  return { name, content, size_bytes: actualSize, sha256 }
+}
+
+export async function readReferenceDocumentSnapshot(filePath: string): Promise<ReferenceDocumentSnapshot> {
+  const resolved = path.resolve(filePath)
+  if (!/\.(?:md|markdown)$/iu.test(path.basename(resolved))) {
+    throw new Error('REFERENCE_DOCUMENT_INVALID: only .md and .markdown files are supported')
+  }
+  let info
+  try {
+    info = await lstat(resolved)
+  } catch {
+    throw new Error(`REFERENCE_DOCUMENT_UNREADABLE: file does not exist: ${resolved}`)
+  }
+  if (!info.isFile()) {
+    throw new Error('REFERENCE_DOCUMENT_INVALID: selected reference must be a regular file')
+  }
+  let bytes: Buffer
+  try {
+    bytes = await readFile(resolved)
+  } catch {
+    throw new Error(`REFERENCE_DOCUMENT_UNREADABLE: cannot read file: ${resolved}`)
+  }
+  if (bytes.byteLength < 1) {
+    throw new Error('REFERENCE_DOCUMENT_INVALID: reference document is empty')
+  }
+  if (bytes.byteLength > MAX_REFERENCE_DOCUMENT_BYTES) {
+    throw new Error(`REFERENCE_DOCUMENT_TOO_LARGE: reference document exceeds ${MAX_REFERENCE_DOCUMENT_BYTES} bytes`)
+  }
+  let content: string
+  try {
+    // Preserve a valid UTF-8 BOM so the frozen content, byte size and digest
+    // all describe exactly the bytes selected by the user.
+    content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
+  } catch {
+    throw new Error('REFERENCE_DOCUMENT_INVALID: reference document must be valid UTF-8')
+  }
+  if (!content.trim()) {
+    throw new Error('REFERENCE_DOCUMENT_INVALID: reference document is empty')
+  }
+  return Object.freeze({
+    name: path.basename(resolved),
+    content,
+    size_bytes: bytes.byteLength,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+  })
+}
+
+export async function freezeReferenceDocumentRequest(
+  value: unknown,
+  authorizePath: (requestedPath: string) => string | Promise<string>,
+): Promise<ReferenceDocumentSnapshot | null> {
+  if (value === null) return null
+  if (!value || typeof value !== 'object' || Array.isArray(value) || typeof (value as Record<string, unknown>).path !== 'string') {
+    throw new Error('INVALID_REQUEST: reference_document must be null or contain a selected path')
+  }
+  const requestedPath = (value as Record<string, unknown>).path as string
+  if (!requestedPath.trim()) throw new Error('INVALID_REQUEST: reference_document path must be non-empty')
+  const authorizedPath = await authorizePath(requestedPath)
+  return readReferenceDocumentSnapshot(authorizedPath)
+}
 const defaultModel = (modelPath: string, required: boolean, description: string) => ({ path: modelPath, required, description })
 
 function normalizeTokenLimit(value: unknown, fallback: number): number {
@@ -311,7 +406,7 @@ export class HostServices {
     const template = (await this.loadTemplates()).find((item: JsonObject) => item.id === templateId && item.version === templateVersion)
     if (!template) throw new Error('SUMMARY_TEMPLATE_NOT_FOUND: trusted template version is unavailable')
     const authMode = profile.encrypted_api_key ? 'bearer' : 'none'
-    return {
+    const recipe: JsonObject = {
       profile_id: profile.id,
       profile_version: profile.version,
       base_url: String(profile.base_url ?? '').trim(),
@@ -325,6 +420,12 @@ export class HostServices {
       input_token_budget: normalizeTokenLimit(profile.max_input_tokens, DEFAULT_SUMMARY_MAX_INPUT_TOKENS),
       max_output_tokens: normalizeTokenLimit(profile.max_output_tokens, DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS),
     }
+    if (Object.prototype.hasOwnProperty.call(input, 'reference_document')) {
+      recipe.reference_document = input.reference_document === null
+        ? null
+        : validateReferenceDocumentSnapshot(input.reference_document)
+    }
+    return recipe
   }
 
   async trustedWorkflowDraft(input: JsonObject): Promise<JsonObject> {
@@ -337,6 +438,9 @@ export class HostServices {
     const templates = await this.loadTemplates()
     const template = templates.find((item) => item.id === requested.template?.id && item.version === requested.template?.version)
     if (!template) throw new Error('SUMMARY_TEMPLATE_NOT_FOUND: trusted template version is unavailable')
+    if (Object.prototype.hasOwnProperty.call(requested, 'reference_document') && requested.reference_document !== null) {
+      requested.reference_document = validateReferenceDocumentSnapshot(requested.reference_document)
+    }
     draft.summary = {
       ...requested,
       profile_id: profile.id,

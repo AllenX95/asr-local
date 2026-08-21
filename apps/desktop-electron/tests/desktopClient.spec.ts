@@ -32,4 +32,19 @@ describe('desktop profile IPC payloads', () => {
     expect(calls[0].args?.profile).toEqual({ ...profile })
     expect(calls[0].args?.profile).not.toBe(profile)
   })
+
+  it('requests Markdown-only filtering for reference note selection', async () => {
+    const calls: Array<{ command: string; args: Record<string, unknown> | undefined }> = []
+    vi.stubGlobal('window', {
+      asrLocal: {
+        invoke: async (command: string, args?: Record<string, unknown>) => {
+          calls.push({ command, args })
+          return 'notes.md'
+        },
+      },
+    })
+
+    await expect(api.selectReferenceMarkdownFile()).resolves.toBe('notes.md')
+    expect(calls).toEqual([{ command: 'select_markdown_file', args: { referenceOnly: true } }])
+  })
 })

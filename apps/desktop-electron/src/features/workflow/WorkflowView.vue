@@ -22,6 +22,7 @@ const devicePolicy = ref<'auto' | 'cpu' | 'cuda'>('auto');
 const pipelineProfile = ref<Exclude<PipelineProfile, 'cloud_asr'>>('pyannote_qwen3_asr');
 const selectedProfileName = ref('');
 const selectedTemplateName = ref('');
+const referenceMarkdownPath = ref('');
 const privacyConfirmed = ref(false);
 const error = ref('');
 const controlErrors = ref<Record<string, string>>({});
@@ -82,16 +83,23 @@ const resummaryTemplate = computed(() =>
 );
 const resummaryProviderAuthorizationText = computed(() => {
   if (!resummaryProfile.value) return '';
-  return `总结文本将发送到 ${resummaryProfile.value.base_url}，使用模型 ${resummaryProfile.value.model}。`;
+  return `转录文本和原有参考速记（如有）将发送到 ${resummaryProfile.value.base_url}，使用模型 ${resummaryProfile.value.model}。`;
 });
 const providerAuthorizationText = computed(() => {
   const notices: string[] = [];
-  if (selectedProfile.value) notices.push(`总结文本将发送到 ${selectedProfile.value.base_url}，使用模型 ${selectedProfile.value.model}`);
+  if (selectedProfile.value) {
+    notices.push(referenceMarkdownPath.value.trim()
+      ? `转录文本和参考速记将发送到 ${selectedProfile.value.base_url}，使用模型 ${selectedProfile.value.model}`
+      : `转录文本将发送到 ${selectedProfile.value.base_url}，使用模型 ${selectedProfile.value.model}`);
+  }
   return notices.length ? `${notices.join('；')}。` : '';
 });
 const pipelineLabel = computed(() => 'Qwen3-ASR');
 
 watch(selectedProfileName, () => {
+  privacyConfirmed.value = false;
+});
+watch(referenceMarkdownPath, () => {
   privacyConfirmed.value = false;
 });
 watch(resummaryProfileName, () => {
@@ -145,6 +153,15 @@ async function chooseOutputDir(): Promise<void> {
   if (selected) outputDir.value = selected;
 }
 
+async function chooseReferenceMarkdown(): Promise<void> {
+  const selected = await api.selectReferenceMarkdownFile();
+  if (selected) referenceMarkdownPath.value = selected;
+}
+
+function clearReferenceMarkdown(): void {
+  referenceMarkdownPath.value = '';
+}
+
 function buildDraft(): WorkflowDraft {
   const profile = selectedProfile.value;
   const template = selectedTemplate.value;
@@ -191,6 +208,7 @@ function buildDraft(): WorkflowDraft {
       context_strategy: 'auto',
       input_token_budget: profile.max_input_tokens,
       max_output_tokens: profile.max_output_tokens,
+      reference_document: referenceMarkdownPath.value.trim() ? { path: referenceMarkdownPath.value.trim() } : null,
     },
     output: {
       directory: outputDir.value.trim() || 'outputs',
@@ -207,7 +225,7 @@ async function submit(): Promise<void> {
     return;
   }
   if (!selectedProfile.value || !privacyConfirmed.value) {
-    error.value = '请确认转录文本将发送到所选总结服务后再启动。';
+    error.value = '请确认转录文本和参考速记（如已选择）将发送到所选总结服务后再启动。';
     return;
   }
   submitting.value = true;
@@ -554,6 +572,16 @@ function phaseLabel(value: string | null | undefined): string {
             {{ template.name }}
           </option>
         </select>
+      </label>
+
+      <label>
+        <span>参考速记（可选）</span>
+        <div class="input-action">
+          <input :value="referenceMarkdownPath" type="text" readonly placeholder="选择 Markdown 速记，提交时会冻结内容" />
+          <button type="button" title="选择参考速记" @click="chooseReferenceMarkdown"><FolderOpen :size="17" /></button>
+          <button v-if="referenceMarkdownPath" type="button" title="清除参考速记" @click="clearReferenceMarkdown"><Trash2 :size="17" /></button>
+        </div>
+        <small class="field-hint">参考速记只用于总结阶段，作为辅助证据；源文件在提交后修改或删除不会影响本次任务。</small>
       </label>
 
       <label>

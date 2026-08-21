@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -11,9 +12,85 @@ vi.mock('electron', () => ({
   },
 }))
 
-import { HostServices } from '../electron/hostServices.js'
+import { HostServices, MAX_REFERENCE_DOCUMENT_BYTES, freezeReferenceDocumentRequest, readReferenceDocumentSnapshot } from '../electron/hostServices.js'
 
 describe('HostServices trusted workflow draft', () => {
+  it('freezes a granted Markdown file as a UTF-8, size and SHA-256 snapshot', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'asr-local-reference-snapshot-'))
+    const filePath = path.join(root, 'notes.md')
+    await writeFile(filePath, '# 速记\n采用 Orion。', 'utf8')
+    const snapshot = await readReferenceDocumentSnapshot(filePath)
+    expect(snapshot).toMatchObject({ name: 'notes.md', content: '# 速记\n采用 Orion。', size_bytes: Buffer.byteLength('# 速记\n采用 Orion。', 'utf8') })
+    expect(snapshot.sha256).toMatch(/^[a-f0-9]{64}$/u)
+    expect(snapshot).not.toHaveProperty('path')
+  })
+
+  it('keeps a UTF-8 BOM consistent across snapshot content, size and digest', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'asr-local-reference-bom-'))
+    const filePath = path.join(root, 'bom.md')
+    const bytes = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('# notes', 'utf8')])
+    await writeFile(filePath, bytes)
+    const snapshot = await readReferenceDocumentSnapshot(filePath)
+    expect(snapshot.content.charCodeAt(0)).toBe(0xfeff)
+    expect(snapshot.size_bytes).toBe(bytes.byteLength)
+    expect(snapshot.sha256).toBe(createHash('sha256').update(bytes).digest('hex'))
+  })
+
+  it('freezes only an authorized path and replaces renderer metadata while preserving null', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'asr-local-reference-freeze-'))
+    const filePath = path.join(root, 'real.md')
+    await writeFile(filePath, '# real content', 'utf8')
+    const authorizePath = vi.fn((requestedPath: string) => {
+      if (requestedPath !== 'selected/real.md') throw new Error('not authorized')
+      return filePath
+    })
+    const snapshot = await freezeReferenceDocumentRequest({
+      path: 'selected/real.md',
+      content: 'forged',
+      size_bytes: 6,
+      sha256: '0'.repeat(64),
+    }, authorizePath)
+    expect(authorizePath).toHaveBeenCalledWith('selected/real.md')
+    expect(snapshot).toMatchObject({ name: 'real.md', content: '# real content' })
+    expect(snapshot).not.toMatchObject({ content: 'forged', sha256: '0'.repeat(64) })
+    await expect(freezeReferenceDocumentRequest({ path: 'outside.md' }, authorizePath)).rejects.toThrow('not authorized')
+    expect(await freezeReferenceDocumentRequest(null, authorizePath)).toBeNull()
+  })
+
+  it('rejects unsupported extension, empty content, invalid UTF-8 and oversized files', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'asr-local-reference-invalid-'))
+    const txtPath = path.join(root, 'notes.txt')
+    await writeFile(txtPath, 'notes', 'utf8')
+    await expect(readReferenceDocumentSnapshot(txtPath)).rejects.toThrow('only .md and .markdown')
+    const emptyPath = path.join(root, 'empty.md')
+    await writeFile(emptyPath, '   ', 'utf8')
+    await expect(readReferenceDocumentSnapshot(emptyPath)).rejects.toThrow('empty')
+    const invalidPath = path.join(root, 'invalid.md')
+    await writeFile(invalidPath, Buffer.from([0xc3, 0x28]))
+    await expect(readReferenceDocumentSnapshot(invalidPath)).rejects.toThrow('valid UTF-8')
+    const largePath = path.join(root, 'large.md')
+    await writeFile(largePath, Buffer.alloc(MAX_REFERENCE_DOCUMENT_BYTES + 1, 0x61))
+    await expect(readReferenceDocumentSnapshot(largePath)).rejects.toThrow('exceeds')
+  })
+
+  it('does not accept renderer-supplied reference metadata as a trusted snapshot', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'asr-local-reference-forged-'))
+    const configDir = path.join(root, 'config')
+    await mkdir(configDir)
+    await writeFile(path.join(configDir, 'summary_profiles.toml'), `[[profiles]]\nname = "Profile"\nbase_url = "https://example.test/v1"\nmodel = "model"\n`)
+    await writeFile(path.join(configDir, 'summary_templates.toml'), `[[templates]]\nname = "Template"\nprompt = "总结"\n`)
+    const host = new HostServices(root, configDir, path.join(root, 'outputs'))
+    const catalogs = await host.catalogs()
+    await expect(host.trustedWorkflowDraft({
+      summary: {
+        profile_id: catalogs.summary_profiles[0].id,
+        profile_version: catalogs.summary_profiles[0].version,
+        template: { id: catalogs.summary_templates[0].id, version: catalogs.summary_templates[0].version },
+        reference_document: { path: 'notes.md', content: 'forged', size_bytes: 6, sha256: '0'.repeat(64) },
+      },
+    })).rejects.toThrow('frozen by the desktop host')
+  })
+
   it('accepts the normalized catalog identity of a migrated legacy summary profile', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'asr-local-profile-repro-'))
     const configDir = path.join(root, 'config')

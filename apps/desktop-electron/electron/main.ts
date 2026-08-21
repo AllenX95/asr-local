@@ -5,7 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ALLOWED_COMMANDS, DESKTOP_INVOKE_CHANNEL, RUNTIME_STATUS_EVENT_CHANNEL, WORKFLOW_EVENT_CHANNEL } from './channels.js'
 import { WorkflowRuntimeClient } from './workflowRuntimeClient.js'
-import { HostServices } from './hostServices.js'
+import { HostServices, freezeReferenceDocumentRequest } from './hostServices.js'
 import { resolveRuntimePaths } from './runtimePaths.js'
 import { createSessionLogger } from './sessionLogger.js'
 import { buildSecretProvideParams } from './credentialGrant.js'
@@ -28,6 +28,11 @@ let quitting = false
 const grantedPaths = new Set<string>()
 
 function grantPath(target: string): string { const resolved = path.resolve(target); grantedPaths.add(resolved); return resolved }
+function assertGrantedPath(target: string): string {
+  const resolved = path.resolve(target)
+  if (!grantedPaths.has(resolved)) throw new Error('REFERENCE_DOCUMENT_FORBIDDEN: file was not selected through the desktop file dialog')
+  return resolved
+}
 function assertAllowedPath(target: string): string {
   const resolved = path.resolve(target)
   const roots = [projectRoot, app.getPath('userData'), outputsDir, ...(legacyOutputsDir ? [legacyOutputsDir] : []), ...grantedPaths]
@@ -55,7 +60,8 @@ async function invoke(command: string, args: Record<string, unknown>): Promise<u
       return result.canceled || !result.filePaths[0] ? null : grantPath(result.filePaths[0])
     }
     case 'select_markdown_file': {
-      const result = await dialog.showOpenDialog(mainWindow!, { properties: ['openFile'], filters: [{ name: 'Markdown', extensions: ['md', 'markdown', 'txt'] }] })
+      const extensions = args.referenceOnly === true ? ['md', 'markdown'] : ['md', 'markdown', 'txt']
+      const result = await dialog.showOpenDialog(mainWindow!, { properties: ['openFile'], filters: [{ name: 'Markdown', extensions }] })
       return result.canceled || !result.filePaths[0] ? null : grantPath(result.filePaths[0])
     }
     case 'select_output_dir': {
@@ -92,13 +98,20 @@ async function invoke(command: string, args: Record<string, unknown>): Promise<u
     case 'workflow_v2_catalogs': return host.catalogs()
     case 'workflow_v2_prompt_preview': return runtime.request('prompt.preview', args.input as Record<string, unknown>)
     case 'workflow_v2_submit': {
-      const draft = args.draft as Record<string, any>
+      const draft = structuredClone(args.draft as Record<string, any>)
       assertAllowedPath(String(draft.source?.path ?? ''))
       assertAllowedPath(String(draft.output?.directory ?? ''))
+      if (draft.summary && Object.prototype.hasOwnProperty.call(draft.summary, 'reference_document')) {
+        draft.summary.reference_document = await freezeReferenceDocumentRequest(draft.summary.reference_document, assertGrantedPath)
+      }
       return runtime.request('workflow.submit', { draft: await host.trustedWorkflowDraft(draft) }, requireString(args, 'operationId'))
     }
     case 'workflow_v2_resummarize': {
-      const summary = await host.trustedSummaryRecipe(args.summary as Record<string, unknown>)
+      const requestedSummary = structuredClone(args.summary as Record<string, any>)
+      if (Object.prototype.hasOwnProperty.call(requestedSummary, 'reference_document')) {
+        requestedSummary.reference_document = await freezeReferenceDocumentRequest(requestedSummary.reference_document, assertGrantedPath)
+      }
+      const summary = await host.trustedSummaryRecipe(requestedSummary)
       return runtime.request('workflow.resummarize', {
         source_workflow_id: requireString(args, 'sourceWorkflowId'),
         expected_attempt_id: requireString(args, 'expectedAttemptId'),
