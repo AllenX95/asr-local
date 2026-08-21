@@ -147,7 +147,7 @@ function catalogVersion(raw: JsonObject): number {
 }
 
 function canonicalTemplateRoot(raw: JsonObject, templates: JsonObject[], version: number): JsonObject {
-  const next = { ...raw, templates, catalog_version: version }
+  const next: JsonObject = { ...raw, templates, catalog_version: version }
   delete next.template_catalog_version
   return next
 }
