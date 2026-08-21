@@ -161,6 +161,7 @@ export interface WorkflowResummarizeCommand {
     profile_id: string
     profile_version: number
     template: { id: string; version: number }
+    reference_document?: { path: string } | null
   }
 }
 

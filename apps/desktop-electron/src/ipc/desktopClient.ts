@@ -40,6 +40,7 @@ export const api = {
     })),
   selectAudioFile: () => invokeDesktop<string | null>('select_audio_file', undefined, () => null),
   selectMarkdownFile: () => invokeDesktop<string | null>('select_markdown_file', undefined, () => null),
+  selectReferenceMarkdownFile: () => invokeDesktop<string | null>('select_markdown_file', { referenceOnly: true }, () => null),
   selectOutputDir: () => invokeDesktop<string | null>('select_output_dir', undefined, () => null),
   readTextFile: (path: string) => invokeDesktop<TextFile>('read_text_file', { path }),
   saveTextFile: (path: string, content: string) =>

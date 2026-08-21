@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 import unittest
 
@@ -12,6 +13,14 @@ FIXTURES = ROOT / "contracts" / "workflow-v2" / "fixtures"
 
 
 class ContractV2CodecTests(unittest.TestCase):
+    def _reference_snapshot(self, content: str = "# notes\n会议决定采用 Orion。") -> dict:
+        return {
+            "name": "meeting-notes.md",
+            "content": content,
+            "size_bytes": len(content.encode("utf-8")),
+            "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        }
+
     def test_all_json_fixtures_decode(self) -> None:
         fixture_paths = sorted(FIXTURES.glob("*.json"))
         self.assertGreaterEqual(len(fixture_paths), 8)
@@ -64,6 +73,32 @@ class ContractV2CodecTests(unittest.TestCase):
         summary["auth_mode"] = "none"
         with self.assertRaises(ProtocolError):
             decode_request(json.dumps(payload).encode("utf-8"))
+
+    def test_reference_document_absent_and_null_remain_compatible(self) -> None:
+        payload = json.loads((FIXTURES / "workflow-submit.request.json").read_text(encoding="utf-8"))
+        payload["params"]["draft"]["summary"].pop("reference_document", None)
+        decoded = decode_request(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        self.assertNotIn("reference_document", decoded["params"]["draft"]["summary"])
+        payload["params"]["draft"]["summary"]["reference_document"] = None
+        decoded = decode_request(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        self.assertIsNone(decoded["params"]["draft"]["summary"]["reference_document"])
+
+    def test_reference_document_validates_size_and_digest(self) -> None:
+        payload = json.loads((FIXTURES / "workflow-submit.request.json").read_text(encoding="utf-8"))
+        reference = self._reference_snapshot()
+        payload["params"]["draft"]["summary"]["reference_document"] = reference
+        decoded = decode_request(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        self.assertEqual(decoded["params"]["draft"]["summary"]["reference_document"], reference)
+        for mutation in (
+            {**reference, "size_bytes": reference["size_bytes"] + 1},
+            {**reference, "sha256": "0" * 64},
+            {**reference, "name": "meeting-notes.txt"},
+            {**reference, "content": ""},
+        ):
+            payload["params"]["draft"]["summary"]["reference_document"] = mutation
+            with self.subTest(mutation=mutation):
+                with self.assertRaises(ProtocolError):
+                    decode_request(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
 
     def test_persistent_operation_payload_rejects_secret(self) -> None:
         payload = json.loads((FIXTURES / "workflow-control.request.json").read_text(encoding="utf-8"))

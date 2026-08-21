@@ -353,6 +353,7 @@ Response：
 | `summary.context_strategy` | `auto`、`single_pass` 或 `hierarchical` |
 | `input_token_budget` | 正整数，由 Summary Profile 默认并可在能力范围内覆盖 |
 | `summary.max_output_tokens` | 正整数，由 Summary Profile 的 `max_output_tokens` 默认 |
+| `summary.reference_document` | 可选 nullable Markdown 快照；desktop host 只接受文件对话框 grant 的 `.md`/`.markdown` 路径，并在提交时冻结 `name`、UTF-8 `content`、`size_bytes` 与 `sha256`，最大 256 KiB |
 | `output.directory` | 必须可创建或可写 |
 | `collision_policy` | `reject` 或 `unique_suffix`；v2 不允许静默覆盖 |
 
@@ -439,7 +440,13 @@ supervisor 接受任务时生成并持久化：
     },
     "context_strategy": "auto",
     "input_token_budget": 100000,
-    "max_output_tokens": 8192
+    "max_output_tokens": 8192,
+    "reference_document": {
+      "name": "meeting-notes.md",
+      "content": "# 速记\n项目代号 Orion。",
+      "size_bytes": 31,
+      "sha256": "hex-digest"
+    }
   },
   "output": {
     "directory": "D:\\outputs\\customer-interview--wf_018f",
@@ -452,6 +459,7 @@ supervisor 接受任务时生成并持久化：
 规则：
 
 - Snapshot 一旦接受不可变。
+- `reference_document` 是提交时冻结的辅助材料；重试和再总结（未显式提供新材料时）沿用该快照，源文件之后的修改或删除不会改变工作流输入。
 - Snapshot 不含 secret。
 - Prompt 与模板保存正文、版本和 digest，用于复现。
 - 本地 pipeline 的 `model_snapshot.components` 保存稳定模型 ID、revision、配置 digest 和解析路径；两个新本地 profile 都必须同时包含 `transcriber` 与 `diarization` component。旧 profile 仅为历史兼容。Cloud pipeline 的组件列表为空，身份由 `cloud_profile` 快照保存。
