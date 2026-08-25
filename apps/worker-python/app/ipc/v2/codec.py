@@ -10,6 +10,8 @@ from .errors import ProtocolError
 
 MAX_MESSAGE_BYTES = 1024 * 1024
 MAX_REFERENCE_DOCUMENT_BYTES = 256 * 1024
+SUMMARY_POLICY_ID = "asr-primary-reference-advisory"
+SUMMARY_POLICY_VERSION = 1
 PROTOCOL = "asr-local-workflow"
 VERSION = 2
 PERSISTENT_OPERATION_METHODS = {
@@ -204,9 +206,9 @@ def _validate_provider(provider: Any, field: str) -> None:
     required = {"profile_id", "profile_version", "base_url", "auth_mode", "model", "credential_ref", "provider_binding_sha256"}
     allowed = set(required)
     if field == "summary":
-        allowed |= {"model_source", "template", "context_strategy", "input_token_budget", "max_output_tokens", "reference_document"}
+        allowed |= {"model_source", "template", "context_strategy", "input_token_budget", "max_output_tokens", "reference_document", "policy_snapshot"}
     _reject_unknown(provider, allowed, field)
-    required_fields = required if field != "summary" else required | {"model_source", "template", "context_strategy", "input_token_budget", "max_output_tokens"}
+    required_fields = required if field != "summary" else required | {"model_source", "template", "context_strategy", "input_token_budget", "max_output_tokens", "policy_snapshot"}
     _require_keys(provider, required_fields, field)
     _string(provider["profile_id"], f"{field}.profile_id")
     if not isinstance(provider["profile_version"], int) or provider["profile_version"] < 1:
@@ -238,6 +240,16 @@ def _validate_provider(provider: Any, field: str) -> None:
                 raise _error(f"{name} must be a positive integer.", f"summary.{name}")
         if "reference_document" in provider and provider["reference_document"] is not None:
             _validate_reference_document(provider["reference_document"], "summary.reference_document")
+        _validate_summary_policy_snapshot(provider["policy_snapshot"], "summary.policy_snapshot")
+
+
+def _validate_summary_policy_snapshot(value: Any, field: str) -> None:
+    if not isinstance(value, dict) or set(value) != {"id", "version"}:
+        raise _error(f"{field} must contain exactly id and version.", field)
+    if value["id"] != SUMMARY_POLICY_ID:
+        raise _error(f"Unsupported summary policy id: {value['id']!r}.", field)
+    if not isinstance(value["version"], int) or isinstance(value["version"], bool) or value["version"] != SUMMARY_POLICY_VERSION:
+        raise _error(f"Unsupported summary policy version: {value['version']!r}.", field)
 
 
 def _validate_reference_document(value: Any, field: str) -> None:

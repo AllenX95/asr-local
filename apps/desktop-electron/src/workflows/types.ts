@@ -27,8 +27,18 @@ export interface WorkflowSpec {
   display_name: string
   source: Record<string, unknown>
   transcription: Record<string, unknown> & { pipeline_profile?: PipelineProfile }
-  summary: Record<string, unknown>
+  summary: WorkflowSummarySnapshot
   output: Record<string, unknown>
+}
+
+/** Immutable worker policy carried by trusted summary snapshots; not a renderer choice. */
+export interface SummaryPolicySnapshot {
+  id: 'asr-primary-reference-advisory'
+  version: 1
+}
+
+export interface WorkflowSummarySnapshot extends Record<string, unknown> {
+  policy_snapshot?: SummaryPolicySnapshot
 }
 
 export interface WorkflowArtifact {

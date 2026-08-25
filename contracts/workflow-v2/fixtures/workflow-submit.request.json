@@ -45,6 +45,10 @@
         "context_strategy": "auto",
         "input_token_budget": 100000,
         "max_output_tokens": 8192,
+        "policy_snapshot": {
+          "id": "asr-primary-reference-advisory",
+          "version": 1
+        },
         "reference_document": {
           "name": "meeting-notes.md",
           "content": "# notes\n会议决定采用 Orion。",

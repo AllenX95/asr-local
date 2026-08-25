@@ -14,7 +14,8 @@ const TOML = (existsSync(vendorTomlPath) ? require(vendorTomlPath) : require('@i
 type JsonObject = Record<string, any>
 const DEFAULT_SUMMARY_MAX_INPUT_TOKENS = 8000
 const DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS = 2000
-const SUMMARY_TEMPLATE_CATALOG_VERSION = 4
+const SUMMARY_TEMPLATE_CATALOG_VERSION = 11
+const SUMMARY_POLICY_SNAPSHOT = Object.freeze({ id: 'asr-primary-reference-advisory', version: 1 })
 export const MAX_REFERENCE_DOCUMENT_BYTES = 256 * 1024
 
 export interface ReferenceDocumentSnapshot {
@@ -476,6 +477,7 @@ export class HostServices {
       model_source: 'profile_default',
       credential_ref: authMode === 'bearer' ? `summary:${profile.id}` : null,
       provider_binding_sha256: providerBindingDigest(profile, authMode),
+      policy_snapshot: { ...SUMMARY_POLICY_SNAPSHOT },
       template: { id: template.id, version: template.version, name: template.name, prompt_snapshot: template.prompt },
       context_strategy: 'auto',
       input_token_budget: normalizeTokenLimit(profile.max_input_tokens, DEFAULT_SUMMARY_MAX_INPUT_TOKENS),
@@ -514,6 +516,7 @@ export class HostServices {
       model_source: 'profile_default',
       credential_ref: authMode === 'bearer' ? `summary:${profile.id}` : null,
       provider_binding_sha256: providerBindingDigest(profile, authMode),
+      policy_snapshot: { ...SUMMARY_POLICY_SNAPSHOT },
       template: { id: template.id, version: template.version, name: template.name, prompt_snapshot: template.prompt },
     }
     return draft

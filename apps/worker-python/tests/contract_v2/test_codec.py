@@ -142,6 +142,46 @@ class ContractV2CodecTests(unittest.TestCase):
         with self.assertRaises(ProtocolError):
             decode_request(json.dumps(payload).encode("utf-8"))
 
+    def test_summary_policy_snapshot_is_required_for_new_submit_and_resummarize(self) -> None:
+        payload = json.loads((FIXTURES / "workflow-submit.request.json").read_text(encoding="utf-8"))
+        summary = payload["params"]["draft"]["summary"]
+        self.assertEqual(summary["policy_snapshot"], {"id": "asr-primary-reference-advisory", "version": 1})
+        decoded = decode_request(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        self.assertEqual(decoded["params"]["draft"]["summary"]["policy_snapshot"], summary["policy_snapshot"])
+
+        summary.pop("policy_snapshot")
+        with self.assertRaises(ProtocolError) as submit_context:
+            decode_request(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        self.assertEqual(submit_context.exception.code, "INVALID_REQUEST")
+
+        resummarize = json.loads((FIXTURES / "workflow-submit.request.json").read_text(encoding="utf-8"))
+        resummarize["method"] = "workflow.resummarize"
+        resummarize["params"] = {
+            "source_workflow_id": "wf_done",
+            "expected_attempt_id": "att_done",
+            "expected_sequence": 24,
+            "input_artifact_id": "artifact_transcript",
+            "summary": resummarize["params"]["draft"]["summary"],
+        }
+        resummarize["params"]["summary"].pop("policy_snapshot")
+        with self.assertRaises(ProtocolError) as resummarize_context:
+            decode_request(json.dumps(resummarize, ensure_ascii=False).encode("utf-8"))
+        self.assertEqual(resummarize_context.exception.code, "INVALID_REQUEST")
+
+    def test_summary_policy_snapshot_rejects_unknown_id_version_or_keys(self) -> None:
+        payload = json.loads((FIXTURES / "workflow-submit.request.json").read_text(encoding="utf-8"))
+        for policy in (
+            {"id": "unknown-policy", "version": 1},
+            {"id": "asr-primary-reference-advisory", "version": 2},
+            {"id": "asr-primary-reference-advisory", "version": True},
+            {"id": "asr-primary-reference-advisory", "version": 1, "extra": True},
+        ):
+            payload["params"]["draft"]["summary"]["policy_snapshot"] = policy
+            with self.subTest(policy=policy):
+                with self.assertRaises(ProtocolError) as context:
+                    decode_request(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                self.assertEqual(context.exception.code, "INVALID_REQUEST")
+
     def test_response_is_utf8_jsonl(self) -> None:
         raw = encode_response("req_1", ok=True, result={"message": "完成"})
         self.assertTrue(raw.endswith(b"\n"))

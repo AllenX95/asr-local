@@ -39,8 +39,12 @@ export class WorkflowRuntimeClient extends EventEmitter {
   }
 
   private async ensureStarted(): Promise<void> {
+    if (this.starting) {
+      await this.starting
+      return
+    }
     if (this.child && this.child.exitCode === null) return
-    if (!this.starting) this.starting = this.start().finally(() => { this.starting = null })
+    this.starting = this.start().finally(() => { this.starting = null })
     await this.starting
   }
 

@@ -11,6 +11,7 @@ TRANSCRIPTS_DIRECTORY = "transcripts"
 SUMMARY_DIRECTORY = "summary"
 STAGING_DIRECTORY = ".staging"
 JOBS_DIRECTORY = ".jobs"
+CHECKPOINTS_DIRECTORY = ".checkpoints"
 
 _INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 
@@ -43,7 +44,7 @@ def artifact_path(snapshot: dict[str, Any], kind: str, revision: int) -> Path:
     output_root = Path(str(output["directory"])).expanduser().resolve()
     workflow_id = str(snapshot["workflow_id"])
     if kind == "summary_checkpoint_json":
-        return workflow_staging_dir(output_root, workflow_id) / _artifact_filename(snapshot, kind, revision)
+        return output_root / CHECKPOINTS_DIRECTORY / workflow_id / _artifact_filename(snapshot, kind, revision)
 
     directory = artifact_directory(output_root, kind)
     if directory is None:

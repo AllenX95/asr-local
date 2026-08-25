@@ -15,30 +15,42 @@ vi.mock('electron', () => ({
 import { HostServices, MAX_REFERENCE_DOCUMENT_BYTES, freezeReferenceDocumentRequest, readReferenceDocumentSnapshot } from '../electron/hostServices.js'
 
 describe('HostServices trusted workflow draft', () => {
-  it('migrates catalog v2 to v4 with id priority, name fallback, custom preservation, backup, and idempotence', async () => {
+  it('migrates a local v10 catalog to bundled v11 with id priority, name fallback, custom preservation, backup, and idempotence', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'asr-local-template-migration-'))
     const defaultsDir = path.join(root, 'config')
     const userConfigDir = path.join(root, 'user-config')
     await mkdir(defaultsDir)
     await mkdir(userConfigDir)
     await writeFile(path.join(defaultsDir, 'summary_templates.toml'), [
-      'catalog_version = 4',
+      'catalog_version = 11',
+      '',
+      '[[templates]]',
+      'id = "summary-template-team-interview"',
+      'version = 8',
+      'name = "团队访谈问答"',
+      'prompt = "bundled team"',
       '',
       '[[templates]]',
       'id = "summary-template-general"',
-      'version = 4',
+      'version = 8',
       'name = "通用模板"',
       'prompt = "bundled general"',
       '',
       '[[templates]]',
       'id = "summary-template-customer"',
-      'version = 4',
+      'version = 8',
       'name = "客户访谈"',
       'prompt = "bundled customer"',
       '',
+      '[[templates]]',
+      'id = "summary-template-first-meeting"',
+      'version = 10',
+      'name = "首次交流模板"',
+      'prompt = "bundled first meeting"',
+      '',
     ].join('\n'))
     await writeFile(path.join(userConfigDir, 'summary_templates.toml'), [
-      'catalog_version = 2',
+      'catalog_version = 10',
       'owner = "keep"',
       '',
       '[[templates]]',
@@ -48,10 +60,22 @@ describe('HostServices trusted workflow draft', () => {
       'prompt = "legacy general"',
       '',
       '[[templates]]',
+      'id = "summary-template-team-interview"',
+      'version = 6',
+      'name = "团队访谈问答"',
+      'prompt = "legacy team"',
+      '',
+      '[[templates]]',
       'id = "summary-template-customer"',
       'version = 1',
       'name = "旧名称"',
       'prompt = "legacy customer"',
+      '',
+      '[[templates]]',
+      'id = "summary-template-first-meeting"',
+      'version = 9',
+      'name = "首次交流模板"',
+      'prompt = "legacy first meeting"',
       '',
       '[[templates]]',
       'id = "custom-template"',
@@ -65,37 +89,39 @@ describe('HostServices trusted workflow draft', () => {
     await host.initialize()
 
     await expect(host.loadTemplates()).resolves.toEqual([
-      { id: 'summary-template-general', version: 4, name: '通用模板', prompt: 'bundled general' },
-      { id: 'summary-template-customer', version: 4, name: '客户访谈', prompt: 'bundled customer' },
+      { id: 'summary-template-team-interview', version: 8, name: '团队访谈问答', prompt: 'bundled team' },
+      { id: 'summary-template-general', version: 8, name: '通用模板', prompt: 'bundled general' },
+      { id: 'summary-template-customer', version: 8, name: '客户访谈', prompt: 'bundled customer' },
+      { id: 'summary-template-first-meeting', version: 10, name: '首次交流模板', prompt: 'bundled first meeting' },
       { id: 'custom-template', version: 7, name: '自定义模板', prompt: 'custom prompt' },
     ])
     const migratedPath = path.join(userConfigDir, 'summary_templates.toml')
     const migratedText = await readFile(migratedPath, 'utf8')
-    expect(migratedText).toContain('catalog_version = 4')
+    expect(migratedText).toContain('catalog_version = 11')
     expect(migratedText).toContain('owner = "keep"')
     expect(migratedText).not.toContain('template_catalog_version')
-    const backupText = await readFile(`${migratedPath}.pre-catalog-v4.bak`, 'utf8')
-    expect(backupText).toContain('catalog_version = 2')
+    const backupText = await readFile(`${migratedPath}.pre-catalog-v11.bak`, 'utf8')
+    expect(backupText).toContain('catalog_version = 10')
 
     await host.initialize()
     await expect(readFile(migratedPath, 'utf8')).resolves.toBe(migratedText)
-    await expect(readFile(`${migratedPath}.pre-catalog-v4.bak`, 'utf8')).resolves.toBe(backupText)
+    await expect(readFile(`${migratedPath}.pre-catalog-v11.bak`, 'utf8')).resolves.toBe(backupText)
   })
 
-  it('does not downgrade a newer user catalog', async () => {
+  it('does not downgrade a newer v12 user catalog', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'asr-local-template-no-downgrade-'))
     const defaultsDir = path.join(root, 'config')
     const userConfigDir = path.join(root, 'user-config')
     await mkdir(defaultsDir)
     await mkdir(userConfigDir)
-    await writeFile(path.join(defaultsDir, 'summary_templates.toml'), 'catalog_version = 4\n[[templates]]\nid = "builtin"\nversion = 4\nname = "内置"\nprompt = "bundled"\n')
-    await writeFile(path.join(userConfigDir, 'summary_templates.toml'), 'catalog_version = 5\n[[templates]]\nid = "builtin"\nversion = 5\nname = "内置"\nprompt = "user newer"\n')
+    await writeFile(path.join(defaultsDir, 'summary_templates.toml'), 'catalog_version = 11\n[[templates]]\nid = "builtin"\nversion = 11\nname = "内置"\nprompt = "bundled"\n')
+    await writeFile(path.join(userConfigDir, 'summary_templates.toml'), 'catalog_version = 12\n[[templates]]\nid = "builtin"\nversion = 12\nname = "内置"\nprompt = "user newer"\n')
 
     const host = new HostServices(root, userConfigDir, path.join(root, 'outputs'))
     await host.initialize()
 
-    await expect(host.loadTemplates()).resolves.toEqual([{ id: 'builtin', version: 5, name: '内置', prompt: 'user newer' }])
-    await expect(readFile(path.join(userConfigDir, 'summary_templates.toml'), 'utf8')).resolves.toContain('catalog_version = 5')
+    await expect(host.loadTemplates()).resolves.toEqual([{ id: 'builtin', version: 12, name: '内置', prompt: 'user newer' }])
+    await expect(readFile(path.join(userConfigDir, 'summary_templates.toml'), 'utf8')).resolves.toContain('catalog_version = 12')
   })
 
   it('generates non-colliding ids for pure Chinese template names', async () => {
@@ -103,7 +129,7 @@ describe('HostServices trusted workflow draft', () => {
     const configDir = path.join(root, 'config')
     await mkdir(configDir)
     await writeFile(path.join(configDir, 'summary_templates.toml'), [
-      'catalog_version = 4', '',
+      'catalog_version = 11', '',
       '[[templates]]', 'name = "团队访谈"', 'prompt = "一"', '',
       '[[templates]]', 'name = "客户访谈"', 'prompt = "二"', '',
       '[[templates]]', 'name = "通用模板"', 'prompt = "三"', '',
@@ -122,13 +148,13 @@ describe('HostServices trusted workflow draft', () => {
     await mkdir(defaultsDir)
     await mkdir(legacyDir)
     await mkdir(userConfigDir)
-    await writeFile(path.join(defaultsDir, 'summary_templates.toml'), 'catalog_version = 4\n[[templates]]\nid = "builtin"\nversion = 4\nname = "通用模板"\nprompt = "bundled"\n')
+    await writeFile(path.join(defaultsDir, 'summary_templates.toml'), 'catalog_version = 11\n[[templates]]\nid = "builtin"\nversion = 11\nname = "通用模板"\nprompt = "bundled"\n')
     await writeFile(path.join(legacyDir, 'summary_templates.toml'), 'template_catalog_version = 2\n[[templates]]\nid = "old"\nversion = 2\nname = "通用模板"\nprompt = "legacy"\n')
 
     const host = new HostServices(root, userConfigDir, path.join(root, 'outputs'), legacyDir)
     await host.initialize()
 
-    await expect(host.loadTemplates()).resolves.toEqual([{ id: 'builtin', version: 4, name: '通用模板', prompt: 'bundled' }])
+    await expect(host.loadTemplates()).resolves.toEqual([{ id: 'builtin', version: 11, name: '通用模板', prompt: 'bundled' }])
   })
 
   it('preserves catalog metadata when saving and deleting templates', async () => {
@@ -136,18 +162,18 @@ describe('HostServices trusted workflow draft', () => {
     const configDir = path.join(root, 'config')
     await mkdir(configDir)
     const filePath = path.join(configDir, 'summary_templates.toml')
-    await writeFile(filePath, 'catalog_version = 4\nowner = "keep"\n[[templates]]\nid = "one"\nversion = 4\nname = "旧模板"\nprompt = "旧"\n')
+    await writeFile(filePath, 'catalog_version = 8\nowner = "keep"\n[[templates]]\nid = "one"\nversion = 7\nname = "旧模板"\nprompt = "旧"\n')
     const host = new HostServices(root, configDir, path.join(root, 'outputs'))
 
     await host.saveTemplate('新模板', '新 prompt')
     const saved = await readFile(filePath, 'utf8')
-    expect(saved).toContain('catalog_version = 4')
+    expect(saved).toContain('catalog_version = 11')
     expect(saved).toContain('owner = "keep"')
     expect(saved).not.toContain('template_catalog_version')
 
     await host.deleteTemplate('旧模板')
     const deleted = await readFile(filePath, 'utf8')
-    expect(deleted).toContain('catalog_version = 4')
+    expect(deleted).toContain('catalog_version = 11')
     expect(deleted).toContain('owner = "keep"')
   })
 
@@ -225,6 +251,46 @@ describe('HostServices trusted workflow draft', () => {
         reference_document: { path: 'notes.md', content: 'forged', size_bytes: 6, sha256: '0'.repeat(64) },
       },
     })).rejects.toThrow('frozen by the desktop host')
+  })
+
+  it('injects the immutable summary policy into every trusted recipe and ignores renderer overrides', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'asr-local-summary-policy-'))
+    const configDir = path.join(root, 'config')
+    await mkdir(configDir)
+    await writeFile(path.join(configDir, 'summary_profiles.toml'), '[[profiles]]\nname = "Profile"\nbase_url = "https://example.test/v1"\nmodel = "model"\n')
+    await writeFile(path.join(configDir, 'summary_templates.toml'), [
+      'catalog_version = 11',
+      '',
+      '[[templates]]', 'id = "summary-template-team-interview"', 'version = 8', 'name = "团队访谈问答"', 'prompt = "team"', '',
+      '[[templates]]', 'id = "summary-template-customer-interview"', 'version = 8', 'name = "客户访谈"', 'prompt = "customer"', '',
+      '[[templates]]', 'id = "summary-template-general"', 'version = 8', 'name = "通用模板"', 'prompt = "general"', '',
+      '[[templates]]', 'id = "summary-template-first-meeting"', 'version = 10', 'name = "首次交流模板"', 'prompt = "first"', '',
+      '[[templates]]', 'id = "custom-template"', 'version = 3', 'name = "自定义"', 'prompt = "custom"', '',
+    ].join('\n'))
+    const host = new HostServices(root, configDir, path.join(root, 'outputs'))
+    const catalogs = await host.catalogs()
+    const profile = catalogs.summary_profiles[0]
+    const expectedPolicy = { id: 'asr-primary-reference-advisory', version: 1 }
+
+    for (const template of catalogs.summary_templates) {
+      const draft = await host.trustedWorkflowDraft({
+        summary: {
+          profile_id: profile.id,
+          profile_version: profile.version,
+          template: { id: template.id, version: template.version },
+          policy_snapshot: { id: 'renderer-forged-policy', version: 99 },
+        },
+      })
+      expect(draft.summary.policy_snapshot).toEqual(expectedPolicy)
+
+      const recipe = await host.trustedSummaryRecipe({
+        profile_id: profile.id,
+        profile_version: profile.version,
+        template: { id: template.id, version: template.version },
+        policy_snapshot: { id: 'renderer-forged-policy', version: 99 },
+      })
+      expect(recipe.policy_snapshot).toEqual(expectedPolicy)
+    }
   })
 
   it('accepts the normalized catalog identity of a migrated legacy summary profile', async () => {

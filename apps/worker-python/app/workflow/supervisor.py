@@ -781,6 +781,86 @@ def _select_checkpoint_artifact(snapshot: dict[str, Any]) -> dict[str, Any] | No
     return candidates[0] if candidates else None
 
 
+_DETERMINISTIC_REPAIR_VERSION = "summary-output-deterministic-repair-v1"
+_DETERMINISTIC_REPAIR_TYPES = frozenset(
+    {
+        "forbidden_financing_completion_summary",
+        "missing_first_mention_reference_attribution",
+        "missing_named_conflict_rows",
+        "missing_explicit_unsettled_financing_state",
+        "unsupported_derived_company_age",
+        "forbidden_third_round_settlement_progress",
+        "untraceable_conflict_row",
+    }
+)
+_DETERMINISTIC_REPAIR_METADATA_KEYS = frozenset(
+    {
+        "transformer_version",
+        "repair_types",
+        "repair_counts",
+        "before_sha256",
+        "after_sha256",
+    }
+)
+
+
+def _normalize_deterministic_repairs(value: Any) -> list[dict[str, Any]]:
+    """Return a strict, data-free copy of adapter repair provenance.
+
+    Older checkpoints do not contain this field and are represented as an
+    empty list. New values are reconstructed from a small allowlist so an
+    adapter cannot accidentally persist prompt text, material, or credentials
+    alongside the checkpoint.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > 16:
+        raise ValueError("SUMMARY_CHECKPOINT_INVALID: deterministic repair metadata is invalid")
+    normalized: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) - _DETERMINISTIC_REPAIR_METADATA_KEYS:
+            raise ValueError("SUMMARY_CHECKPOINT_INVALID: deterministic repair metadata is invalid")
+        transformer_version = item.get("transformer_version")
+        repair_types = item.get("repair_types")
+        repair_counts = item.get("repair_counts")
+        before_sha256 = item.get("before_sha256")
+        after_sha256 = item.get("after_sha256")
+        if transformer_version != _DETERMINISTIC_REPAIR_VERSION:
+            raise ValueError("SUMMARY_CHECKPOINT_INVALID: deterministic repair metadata is invalid")
+        if (
+            not isinstance(repair_types, list)
+            or not repair_types
+            or len(repair_types) > len(_DETERMINISTIC_REPAIR_TYPES)
+            or any(not isinstance(item_type, str) or item_type not in _DETERMINISTIC_REPAIR_TYPES for item_type in repair_types)
+            or len(set(repair_types)) != len(repair_types)
+            or not isinstance(repair_counts, dict)
+            or set(repair_counts) != set(repair_types)
+            or any(
+                isinstance(count, bool)
+                or not isinstance(count, int)
+                or count < 1
+                for count in repair_counts.values()
+            )
+            or not _is_sha256_hex(before_sha256)
+            or not _is_sha256_hex(after_sha256)
+        ):
+            raise ValueError("SUMMARY_CHECKPOINT_INVALID: deterministic repair metadata is invalid")
+        normalized.append(
+            {
+                "transformer_version": transformer_version,
+                "repair_types": list(repair_types),
+                "repair_counts": {item_type: int(repair_counts[item_type]) for item_type in repair_types},
+                "before_sha256": before_sha256,
+                "after_sha256": after_sha256,
+            }
+        )
+    return normalized
+
+
+def _is_sha256_hex(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+
+
 def _read_summary_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
     path = Path(str(artifact.get("path", "")))
     if not path.is_file():
@@ -789,7 +869,11 @@ def _read_summary_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
         payload = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict) or not isinstance(payload.get("text"), str):
             raise ValueError("SUMMARY_CHECKPOINT_INVALID: checkpoint does not contain summary text")
-        return {"kind": "final_summary_markdown", "text": payload["text"]}
+        return {
+            "kind": "final_summary_markdown",
+            "text": payload["text"],
+            "deterministic_repairs": _normalize_deterministic_repairs(payload.get("deterministic_repairs")),
+        }
     return {"kind": "final_summary_markdown", "text": path.read_text(encoding="utf-8")}
 
 
@@ -798,6 +882,10 @@ def _summary_checkpoint_result(result: dict[str, Any]) -> dict[str, Any]:
         "text": str(result.get("text", "")),
         "strategy": result.get("strategy"),
         "provider_request_keys": list(result.get("provider_request_keys", [])),
+        # Keep this field present even for older/metadata-free generators so
+        # checkpoint consumers have one stable shape. The normalizer copies
+        # only the non-sensitive provenance fields and rejects arbitrary data.
+        "deterministic_repairs": _normalize_deterministic_repairs(result.get("deterministic_repairs")),
     }
     return {"kind": "summary_checkpoint_json", "text": json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"}
 
@@ -830,6 +918,7 @@ def _add_artifact(
     next_snapshot = json.loads(json.dumps(snapshot))
     revision = max((int(item.get("revision", 0)) for item in next_snapshot.get("artifacts", []) if item.get("kind") == kind), default=0) + 1
     path, text = _materialize_artifact(next_snapshot, result, kind=kind, revision=revision)
+    raw = Path(path).read_bytes()
     if kind in {"transcript_markdown", "transcript_json"}:
         for existing in next_snapshot.get("artifacts", []):
             if existing.get("kind") in {"summary_checkpoint_json", "final_summary_markdown", "final_summary_json"}:
@@ -849,8 +938,8 @@ def _add_artifact(
         "input_artifact_ids": list(input_artifact_ids or []),
         "stale": False,
         "path": path,
-        "size_bytes": len(text.encode("utf-8")),
-        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "size_bytes": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
         "created_at": clock,
     }
     next_snapshot["artifacts"].append(artifact)
@@ -868,7 +957,10 @@ def _materialize_artifact(snapshot: dict[str, Any], result: dict[str, Any], *, k
     output_path = artifact_path(snapshot, kind, revision)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = output_path.with_suffix(output_path.suffix + ".tmp")
-    temp_path.write_text(text, encoding="utf-8")
+    # Write the exact UTF-8 bytes before the atomic replace.  Using
+    # Path.write_text here would allow platform newline translation, making
+    # the persisted bytes disagree with the artifact's declared digest.
+    temp_path.write_bytes(text.encode("utf-8"))
     temp_path.replace(output_path)
     return str(output_path), text
 

@@ -312,6 +312,10 @@ Response：
     "model_source": "profile_default",
     "credential_ref": "credential://summary/summary-profile-uuid",
     "provider_binding_sha256": "hex-digest",
+    "policy_snapshot": {
+      "id": "asr-primary-reference-advisory",
+      "version": 1
+    },
     "template": {
       "id": "summary-template-uuid",
       "version": 3,
@@ -349,6 +353,7 @@ Response：
 | `summary.model` | Profile 默认模型或 Summary Recipe 的显式覆盖；`model_source` 必须说明来源 |
 | `summary.credential_ref` | `bearer` 时必填 opaque identity，`none` 时必须为 `null` |
 | `summary.provider_binding_sha256` | 必须等于按键名字典序序列化的 `{auth_mode, base_url, model, profile_id, profile_version}` 紧凑 JSON UTF-8 SHA-256 |
+| `summary.policy_snapshot` | 可选历史兼容字段；新任务由 desktop host 无条件注入 `{ "id": "asr-primary-reference-advisory", "version": 1 }`，worker 只接受该精确对象，不由 renderer 选择或覆盖 |
 | `summary.template.prompt_snapshot` | 必填，最多 32000 字符 |
 | `summary.context_strategy` | `auto`、`single_pass` 或 `hierarchical` |
 | `input_token_budget` | 正整数，由 Summary Profile 默认并可在能力范围内覆盖 |
@@ -431,6 +436,10 @@ supervisor 接受任务时生成并持久化：
     "model_source": "profile_default",
     "credential_ref": "credential://summary/summary-profile-uuid",
     "provider_binding_sha256": "hex-digest",
+    "policy_snapshot": {
+      "id": "asr-primary-reference-advisory",
+      "version": 1
+    },
     "template": {
       "id": "summary-template-uuid",
       "version": 3,
@@ -464,6 +473,7 @@ supervisor 接受任务时生成并持久化：
 - Prompt 与模板保存正文、版本和 digest，用于复现。
 - 本地 pipeline 的 `model_snapshot.components` 保存稳定模型 ID、revision、配置 digest 和解析路径；两个新本地 profile 都必须同时包含 `transcriber` 与 `diarization` component。旧 profile 仅为历史兼容。Cloud pipeline 的组件列表为空，身份由 `cloud_profile` 快照保存。
 - Summary Profile 拥有 endpoint、认证模式、credential ref、默认模型以及 `max_input_tokens` / `max_output_tokens`；缺省时分别兼容为 8000 / 2000。Summary Recipe 将这两个值快照为 `input_token_budget` / `max_output_tokens`，只有显式配置时才覆盖模型，`model_source` 记录最终来源。
+- `summary.policy_snapshot` 是不进入模板目录的不可变产品策略。显式为 `asr-primary-reference-advisory` v1 时，Summary Adapter 使用 ASR 主依据、参考速记仅辅助的 generation-first 规则并旁路旧输出审计；缺失该字段的历史快照仅对首次交流模板 v8+ 做兼容推断，其他历史模板保持 legacy 行为。
 - `device_policy` 是用户意图，实际设备属于 RuntimePlan。
 - 任务执行前源文件 fingerprint 不一致时失败为 `SOURCE_CHANGED`。
 
@@ -551,6 +561,8 @@ diagnostic_log
 
 只有文件成功写入临时路径并原子替换后，才能发布 ArtifactRef。已发布 artifact 不可原地修改或复用同一路径；用户编辑必须通过 `artifact.register_revision` 创建 `origin=user_edited` 的新 revision，并用 `derived_from_artifact_id` 指向直接来源。总结 artifact 的 `input_artifact_ids` 必须包含所使用的 transcript artifact ID；输入 transcript 出现更新修订时，基于旧修订的总结标记为 `stale=true`，但不得删除。
 
+`summary_checkpoint_json` 是可供 `writing_final` 重试复用的持久检查点，物理路径固定为输出根目录下 `.checkpoints/<workflow-id>/summary-checkpoint[-rN].json`，不属于可清理的 `.staging` 或 `.jobs` 工作区。worker 必须先以 UTF-8 bytes 写入临时文件并原子替换，再以实体 bytes 计算 `size_bytes` 和 `sha256`；完成任务的 workspace cleanup 不得删除该目录。删除最终 Markdown 后，`writing_final` retry 应直接读取该检查点，不得再次调用总结 provider。
+
 ### 7.7 WorkflowSnapshot
 
 ```json
@@ -605,6 +617,7 @@ diagnostic_log
 - `artifacts` 是按 revision 保留的 ArtifactRef 列表；同一 kind 可以存在多个 revision。
 - `recovery.recommended_retry_stage` 只提供建议，不会自动创建 attempt 或调用模型/provider。
 - `recovery.input_artifact_id` 仅在用户显式选择 transcript revision 进行 summary retry 时保存，worker 必须验证该 revision 属于本 workflow 且未标记 stale。
+- `summary_checkpoint_json` 在 registry snapshot 中持久化其实体路径、大小和摘要；重开 registry 后仍必须可读。`writing_final` retry 只依赖该检查点和当前 workflow snapshot，不重新执行总结阶段。
 - `last_error` 使用第 12 节错误模型且不得包含 secret。
 
 ## 8. 合法状态迁移
@@ -858,7 +871,7 @@ Result：
 - retry 创建新的 `attempt_id`，`workflow_id` 不变。
 - `auto` 从失败阶段和最近有效检查点决定。
 - summary retry 保留 transcript artifacts；`input_artifact_id` 缺省时使用最新非 stale transcript，显式提供时必须引用本 workflow 的有效 transcript revision。
-- writing retry 保留总结结果；若首版不持久化总结中间结果，则必须降级为 summary retry 并明确返回。
+- writing retry 保留并复用 `.checkpoints/<workflow-id>/summary-checkpoint[-rN].json`；删除最终 Markdown 后仍可直接写回，不能再次调用总结 provider，也不降级为 summary retry。
 - transcription retry 必须版本化或清除所有下游产物引用，不能把旧 summary 误标为新结果。
 - 旧 attempt 的迟到事件必须忽略。
 
@@ -868,7 +881,7 @@ Result：
 `expected_attempt_id` / `expected_sequence`，复制指定的最新有效 transcript
 作为新 workflow 的输入，只执行 `summarizing` 和最终写入阶段；原 workflow
 及其总结产物保持不变。新的 summary recipe 由 desktop host 根据 Profile 与
-模板身份解析后提交，worker 不接收秘密。
+模板身份解析后提交；desktop host 会重新注入不可变的 `summary.policy_snapshot`，renderer 传入的同名字段不会被信任，worker 不接收秘密。
 
 ### 10.8 `artifact.register_revision`
 
@@ -993,6 +1006,7 @@ response 表示停止策略已生效；进程实际结束以 stdout EOF 为准�
 - `single_pass`：转录稿超过 `input_token_budget` 时失败为 `SUMMARY_INPUT_TOO_LARGE`。
 - `hierarchical`：按稳定段落边界拆分，生成局部总结后再进行归并；所有分块和归并尝试共享同一 attempt，但需要独立诊断 ID。
 - `auto`：预算内使用 single pass，超出预算时使用 hierarchical。
+- 每次调用的 system message 固定包含证据规则与任务模板；user message 只包含带边界的 Transcript Markdown 和可选 Reference Notes Markdown。system、模板、转录稿、参考速记和边界标签都必须计入预算，不能因语言或分块阶段漏算。
 - 每次外部总结调用必须有稳定 provider request key；provider 支持幂等 header 时必须使用。
 - 如果外部 provider 已处理请求但 response 丢失，系统不得宣称 exactly-once；应记录 `SUMMARY_RESULT_UNKNOWN` 并要求用户确认是否重试，以避免无提示重复计费。
 - 鉴权失败不自动重试；限流和临时网络错误最多自动重试两次，并采用带抖动的指数退避。

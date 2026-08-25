@@ -2,13 +2,23 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from pathlib import Path
 import tempfile
 import unittest
 
+from app.summary.openai_compatible import OpenAICompatibleSummaryGenerator
 from app.workflow.registry import WorkflowRegistry
 from app.workflow.state_machine import create_initial_snapshot
-from app.workflow.supervisor import FakeSummaryGenerator, FakeTranscriber, WorkflowSupervisor, _apply_control, build_spec
+from app.workflow.supervisor import (
+    FakeSummaryGenerator,
+    FakeTranscriber,
+    WorkflowSupervisor,
+    _apply_control,
+    _read_summary_artifact,
+    _summary_checkpoint_result,
+    build_spec,
+)
 
 
 class SelectiveFailTranscriber:
@@ -51,6 +61,46 @@ class CountingSummaryGenerator:
         return {"kind": "final_summary_markdown", "text": f"summary-{self.calls}"}
 
 
+class ProvenanceSummaryGenerator:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def summarize(self, spec: dict, transcript: dict, attempt_id: str) -> dict:
+        del spec, transcript, attempt_id
+        self.calls += 1
+        return {
+            "kind": "final_summary_markdown",
+            "text": "summary-with-provenance",
+            "strategy": "single_pass",
+            "provider_request_keys": ["request-key"],
+            "deterministic_repairs": [
+                {
+                    "transformer_version": "summary-output-deterministic-repair-v1",
+                    "repair_types": [
+                        "forbidden_financing_completion_summary",
+                        "missing_first_mention_reference_attribution",
+                        "missing_named_conflict_rows",
+                        "missing_explicit_unsettled_financing_state",
+                        "unsupported_derived_company_age",
+                        "forbidden_third_round_settlement_progress",
+                        "untraceable_conflict_row",
+                    ],
+                    "repair_counts": {
+                        "forbidden_financing_completion_summary": 1,
+                        "missing_first_mention_reference_attribution": 2,
+                        "missing_named_conflict_rows": 3,
+                        "missing_explicit_unsettled_financing_state": 1,
+                        "unsupported_derived_company_age": 1,
+                        "forbidden_third_round_settlement_progress": 1,
+                        "untraceable_conflict_row": 1,
+                    },
+                    "before_sha256": "a" * 64,
+                    "after_sha256": "b" * 64,
+                }
+            ],
+        }
+
+
 class CountingTranscriber:
     def __init__(self) -> None:
         self.calls = 0
@@ -59,6 +109,16 @@ class CountingTranscriber:
         del spec, attempt_id
         self.calls += 1
         return {"kind": "transcript_markdown", "path": "", "text": "stable transcript"}
+
+
+class NoCallSummaryGenerator:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def summarize(self, spec: dict, transcript: dict, attempt_id: str) -> dict:
+        del spec, transcript, attempt_id
+        self.calls += 1
+        raise AssertionError("writing_final retry must reuse the summary checkpoint")
 
 
 def make_draft(source: Path, name: str = "sample") -> dict:
@@ -84,6 +144,7 @@ def make_draft(source: Path, name: str = "sample") -> dict:
             "model_source": "profile_default",
             "credential_ref": None,
             "provider_binding_sha256": "hex-digest",
+            "policy_snapshot": {"id": "asr-primary-reference-advisory", "version": 1},
             "template": {"id": "template-uuid", "version": 1, "name": "default", "prompt_snapshot": "Summarize."},
             "context_strategy": "auto",
             "input_token_budget": 1000,
@@ -94,6 +155,131 @@ def make_draft(source: Path, name: str = "sample") -> dict:
 
 
 class SupervisorTests(unittest.TestCase):
+    def test_materialized_artifact_metadata_matches_exact_utf8_bytes(self) -> None:
+        async def scenario() -> None:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                source = root / "source.wav"
+                source.write_bytes(b"audio")
+                draft = make_draft(source, "utf8-bytes")
+                draft["output"]["directory"] = str(root / "outputs")
+                registry = WorkflowRegistry(root / "registry.sqlite3")
+                supervisor = WorkflowSupervisor(registry, transcriber=FakeTranscriber(), summary_generator=FakeSummaryGenerator())
+                submitted = await supervisor.submit(draft, operation_id="op_utf8_bytes")
+                await supervisor._queue.join()
+                completed = await supervisor.get(submitted["snapshot"]["workflow_id"])
+                for artifact in completed["artifacts"]:
+                    path = Path(artifact["path"])
+                    raw = path.read_bytes()
+                    self.assertEqual(artifact["size_bytes"], len(raw))
+                    self.assertEqual(artifact["sha256"], hashlib.sha256(raw).hexdigest())
+                await supervisor.shutdown(interrupt=False)
+                registry.close()
+
+        asyncio.run(scenario())
+
+    def test_summary_checkpoint_survives_cleanup_registry_reopen_and_writing_final_retry(self) -> None:
+        async def scenario() -> None:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                source = root / "source.wav"
+                source.write_bytes(b"audio")
+                draft = make_draft(source, "checkpoint-reopen")
+                draft["output"]["directory"] = str(root / "outputs")
+                registry_path = root / "registry.sqlite3"
+                registry = WorkflowRegistry(registry_path)
+                initial_summary = ProvenanceSummaryGenerator()
+                supervisor = WorkflowSupervisor(registry, transcriber=FakeTranscriber(), summary_generator=initial_summary)
+                submitted = await supervisor.submit(draft, operation_id="op_checkpoint_reopen")
+                workflow_id = submitted["snapshot"]["workflow_id"]
+                await supervisor._queue.join()
+                completed = await supervisor.get(workflow_id)
+                checkpoint = next(item for item in completed["artifacts"] if item["kind"] == "summary_checkpoint_json")
+                checkpoint_path = Path(checkpoint["path"])
+                self.assertEqual(checkpoint_path.parent.parent.name, ".checkpoints")
+                self.assertTrue(checkpoint_path.is_file())
+                original_checkpoint_payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+                self.assertEqual(original_checkpoint_payload["text"], "summary-with-provenance")
+                self.assertEqual(len(original_checkpoint_payload["deterministic_repairs"]), 1)
+                self.assertEqual(
+                    set(original_checkpoint_payload["deterministic_repairs"][0]),
+                    {
+                        "transformer_version",
+                        "repair_types",
+                        "repair_counts",
+                        "before_sha256",
+                        "after_sha256",
+                    },
+                )
+                self.assertNotIn("summary-with-provenance", json.dumps(original_checkpoint_payload["deterministic_repairs"], ensure_ascii=False))
+                original_final = next(item for item in completed["artifacts"] if item["kind"] == "final_summary_markdown" and not item.get("stale"))
+                original_final_bytes = Path(original_final["path"]).read_bytes()
+                original_final_sha256 = hashlib.sha256(original_final_bytes).hexdigest()
+                await supervisor.shutdown(interrupt=False)
+                registry.close()
+
+                reopened = WorkflowRegistry(registry_path)
+                restored = reopened.get_snapshot(workflow_id)
+                self.assertEqual(restored["spec"]["summary"]["policy_snapshot"], {"id": "asr-primary-reference-advisory", "version": 1})
+                restored_checkpoint = next(item for item in restored["artifacts"] if item["kind"] == "summary_checkpoint_json")
+                restored_checkpoint_path = Path(restored_checkpoint["path"])
+                self.assertTrue(restored_checkpoint_path.is_file())
+                self.assertEqual(json.loads(restored_checkpoint_path.read_text(encoding="utf-8"))["deterministic_repairs"], original_checkpoint_payload["deterministic_repairs"])
+                final = next(item for item in restored["artifacts"] if item["kind"] == "final_summary_markdown" and not item.get("stale"))
+                Path(final["path"]).unlink()
+                no_call = NoCallSummaryGenerator()
+                retry_supervisor = WorkflowSupervisor(reopened, transcriber=FakeTranscriber(), summary_generator=no_call)
+                retried = await retry_supervisor.retry(
+                    {
+                        "workflow_id": workflow_id,
+                        "expected_attempt_id": restored["attempt"]["attempt_id"],
+                        "expected_sequence": restored["sequence"],
+                        "from_stage": "writing_final",
+                    },
+                    operation_id="op_checkpoint_write_retry",
+                )
+                await retry_supervisor._queue.join()
+                after_retry = await retry_supervisor.get(workflow_id)
+                self.assertEqual(after_retry["status"], "completed")
+                self.assertEqual(after_retry["spec"]["summary"]["policy_snapshot"], {"id": "asr-primary-reference-advisory", "version": 1})
+                self.assertEqual(no_call.calls, 0)
+                retried_final = next(item for item in after_retry["artifacts"] if item["kind"] == "final_summary_markdown" and not item.get("stale"))
+                self.assertTrue(Path(retried_final["path"]).is_file())
+                self.assertEqual(Path(retried_final["path"]).read_bytes(), original_final_bytes)
+                self.assertEqual(retried_final["sha256"], original_final_sha256)
+                after_retry_checkpoint = next(item for item in after_retry["artifacts"] if item["kind"] == "summary_checkpoint_json" and not item.get("stale"))
+                self.assertEqual(
+                    json.loads(Path(after_retry_checkpoint["path"]).read_text(encoding="utf-8"))["deterministic_repairs"],
+                    original_checkpoint_payload["deterministic_repairs"],
+                )
+                await retry_supervisor.shutdown(interrupt=False)
+                reopened.close()
+
+        asyncio.run(scenario())
+
+    def test_legacy_summary_checkpoint_without_repair_metadata_reads_as_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "legacy-summary.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "text": "legacy summary",
+                        "strategy": "single_pass",
+                        "provider_request_keys": ["legacy-key"],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            restored = _read_summary_artifact({"kind": "summary_checkpoint_json", "path": str(path)})
+            self.assertEqual(restored["text"], "legacy summary")
+            self.assertEqual(restored["deterministic_repairs"], [])
+
+            checkpoint = _summary_checkpoint_result({"text": "legacy summary"})
+            payload = json.loads(checkpoint["text"])
+            self.assertEqual(payload["text"], "legacy summary")
+            self.assertEqual(payload["deterministic_repairs"], [])
+
     def test_waiting_for_secret_can_be_cancelled(self) -> None:
         snapshot = {
             "status": "waiting_for_secret",
@@ -472,6 +658,80 @@ class SupervisorTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_reopened_historical_v8_summary_retry_without_policy_uses_compatibility_resolver(self) -> None:
+        async def scenario() -> None:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                source = root / "source.wav"
+                source.write_bytes(b"audio")
+                calls: list[dict] = []
+
+                def request(_url, payload, _headers):
+                    calls.append(payload)
+                    return "historical summary"
+
+                draft = make_draft(source, "historical-v8")
+                draft["output"]["directory"] = str(root / "outputs")
+                draft["summary"]["template"] = {
+                    "id": "summary-template-first-meeting",
+                    "version": 8,
+                    "name": "首次交流模板",
+                    "prompt_snapshot": "首次交流历史模板。",
+                }
+                registry_path = root / "registry.sqlite3"
+                registry = WorkflowRegistry(registry_path)
+                supervisor = WorkflowSupervisor(
+                    registry,
+                    transcriber=FakeTranscriber(),
+                    summary_generator=OpenAICompatibleSummaryGenerator(request_fn=request),
+                    max_inflight=1,
+                )
+                submitted = await supervisor.submit(draft, operation_id="op_historical_v8_submit")
+                await supervisor._queue.join()
+                completed = await supervisor.get(submitted["snapshot"]["workflow_id"])
+                transcript = next(item for item in completed["artifacts"] if item["kind"] == "transcript_markdown")
+                await supervisor.shutdown(interrupt=False)
+
+                historical = json.loads(json.dumps(completed))
+                historical["spec"]["summary"].pop("policy_snapshot")
+                historical["sequence"] += 1
+                historical["timestamps"]["updated_at"] = "2026-07-10T12:00:01Z"
+                registry.save_snapshot(historical, supervisor._event(historical, "legacy_snapshot_restored"))
+                registry.close()
+
+                calls.clear()
+                reopened = WorkflowRegistry(registry_path)
+                reopened_supervisor = WorkflowSupervisor(
+                    reopened,
+                    transcriber=FakeTranscriber(),
+                    summary_generator=OpenAICompatibleSummaryGenerator(request_fn=request),
+                    max_inflight=1,
+                )
+                persisted = await reopened_supervisor.get(historical["workflow_id"])
+                self.assertNotIn("policy_snapshot", persisted["spec"]["summary"])
+                retry = await reopened_supervisor.retry(
+                    {
+                        "workflow_id": persisted["workflow_id"],
+                        "expected_attempt_id": persisted["attempt"]["attempt_id"],
+                        "expected_sequence": persisted["sequence"],
+                        "from_stage": "summarizing",
+                        "input_artifact_id": transcript["artifact_id"],
+                    },
+                    operation_id="op_historical_v8_retry",
+                )
+                await reopened_supervisor._queue.join()
+                final = await reopened_supervisor.get(persisted["workflow_id"])
+                self.assertTrue(retry["accepted"])
+                self.assertEqual(final["status"], "completed")
+                self.assertNotIn("policy_snapshot", final["spec"]["summary"])
+                self.assertEqual(len(calls), 1)
+                self.assertIn("参考速记可能不完整或有误", calls[0]["messages"][0]["content"])
+                self.assertNotIn("<summary_output_audit>", calls[0]["messages"][1]["content"])
+                await reopened_supervisor.shutdown(interrupt=False)
+                reopened.close()
+
+        asyncio.run(scenario())
+
     def test_reject_collision_policy_is_checked_before_queueing(self) -> None:
         async def scenario() -> None:
             with tempfile.TemporaryDirectory() as temp:
@@ -519,6 +779,7 @@ class SupervisorTests(unittest.TestCase):
                 submitted = await supervisor.submit(draft, operation_id="op_resummary_source")
                 await supervisor._queue.join()
                 original = await supervisor.get(submitted["snapshot"]["workflow_id"])
+                self.assertEqual(original["spec"]["summary"]["policy_snapshot"], {"id": "asr-primary-reference-advisory", "version": 1})
                 original_transcript = next(item for item in original["artifacts"] if item["kind"] == "transcript_markdown")
                 original_final = next(item for item in original["artifacts"] if item["kind"] == "final_summary_markdown")
                 source.unlink()
@@ -549,6 +810,7 @@ class SupervisorTests(unittest.TestCase):
                 self.assertEqual(transcriber.calls, 1)
                 self.assertEqual(summary_generator.calls, 2)
                 self.assertEqual(derived["spec"]["summary"]["model"], "summary-model-v2")
+                self.assertEqual(derived["spec"]["summary"]["policy_snapshot"], {"id": "asr-primary-reference-advisory", "version": 1})
                 self.assertEqual(derived["spec"]["summary"]["reference_document"], draft["summary"]["reference_document"])
                 self.assertEqual(derived["spec"]["summary"]["template"]["prompt_snapshot"], "Extract action items.")
                 self.assertEqual(derived_transcript["derived_from_artifact_id"], original_transcript["artifact_id"])
@@ -583,13 +845,13 @@ class SupervisorTests(unittest.TestCase):
                 ]
                 self.assertTrue(all(Path(item["path"]).is_file() for item in persisted_artifacts))
                 checkpoint = next(item for item in completed["artifacts"] if item["kind"] == "summary_checkpoint_json")
-                self.assertFalse(Path(checkpoint["path"]).exists())
+                self.assertTrue(Path(checkpoint["path"]).is_file())
                 result = await supervisor.clear({"workflow_id": workflow_id}, operation_id="op_clear_done")
                 self.assertTrue(result["cleared"])
                 self.assertEqual(await supervisor.list(), [])
                 with self.assertRaises(KeyError):
                     await supervisor.get(workflow_id)
-                self.assertTrue(all(path.is_file() for path in artifact_paths if path != Path(checkpoint["path"])))
+                self.assertTrue(all(path.is_file() for path in artifact_paths))
                 await supervisor.shutdown(interrupt=False)
                 registry.close()
 
