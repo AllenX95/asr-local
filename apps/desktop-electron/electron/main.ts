@@ -147,6 +147,9 @@ async function createWindow(): Promise<void> {
     width: 1360, height: 900, minWidth: 1100, minHeight: 720, show: false,
     webPreferences: { preload: path.join(appDir, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   })
+  const resetRendererZoom = () => mainWindow?.webContents.setZoomFactor(1)
+  mainWindow.webContents.on('did-finish-load', resetRendererZoom)
+  resetRendererZoom()
   mainWindow.maximize()
   mainWindow.once('ready-to-show', () => mainWindow?.show())
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))

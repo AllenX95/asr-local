@@ -29,6 +29,8 @@ body {
   min-width: 0;
   min-height: 720px;
   overflow: hidden;
+  font-size: 15px;
+  line-height: 1.45;
 }
 
 button,
@@ -36,6 +38,7 @@ input,
 select,
 textarea {
   font: inherit;
+  font-size: 15px;
 }
 
 button {
@@ -117,7 +120,7 @@ label {
   display: grid;
   gap: 7px;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 label span {
@@ -126,6 +129,7 @@ label span {
 
 small {
   color: var(--text-muted);
+  font-size: 13px;
 }
 
 small.ok {
@@ -139,12 +143,12 @@ p {
 }
 
 h1 {
-  font-size: 24px;
+  font-size: 26px;
   line-height: 1.2;
 }
 
 h2 {
-  font-size: 15px;
+  font-size: 18px;
   line-height: 1.25;
 }
 
@@ -194,7 +198,7 @@ h2 {
 .brand-block span {
   margin-top: 3px;
   color: #aeb8aa;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .nav-rail nav {
@@ -546,7 +550,7 @@ h2 {
   background: #edf0ec;
   padding: 4px 8px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .status-badge[data-status="completed"] { background: #e8f4ec; color: #277044; }
@@ -889,7 +893,7 @@ h2 {
 
 .cm-editor {
   height: 100%;
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .cm-scroller {
