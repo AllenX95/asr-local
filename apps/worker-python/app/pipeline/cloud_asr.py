@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from collections import deque
 from io import BytesIO
 import hashlib
 import json
+import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 import urllib.error
@@ -18,6 +21,10 @@ from app.schemas import AsrCloudProfile
 
 
 DEFAULT_TIMEOUT_SECONDS = 600
+# A cloud request may be backed by a native socket call that cannot be
+# interrupted safely.  Keep shutdown bounded by default; callers can opt into
+# a longer grace period explicitly when their endpoint supports cancellation.
+CLOUD_CLOSE_WAIT_SECONDS = 0.25
 
 
 @dataclass(slots=True)
@@ -26,12 +33,42 @@ class CloudAsrResult:
     language: str | None = None
 
 
+class CloudAttemptCancelled(RuntimeError):
+    """A cloud request completed after its workflow attempt was cancelled."""
+
+    cancelled = True
+
+
 class CloudAsrTranscriber:
     """OpenAI-compatible audio transcription adapter with just-in-time auth."""
 
-    def __init__(self, *, secret_provider=None, request_fn: Callable[..., dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        secret_provider=None,
+        request_fn: Callable[..., dict[str, Any]] | None = None,
+        close_wait_seconds: float = CLOUD_CLOSE_WAIT_SECONDS,
+        close_wait_timeout_seconds: float | None = None,
+    ) -> None:
         self.secret_provider = secret_provider
         self.request_fn = request_fn or _request_multipart
+        self.close_wait_seconds = max(
+            0.0,
+            float(
+                close_wait_seconds
+                if close_wait_timeout_seconds is None
+                else close_wait_timeout_seconds
+            ),
+        )
+        self._lifecycle = threading.Condition(threading.Lock())
+        self._closing = False
+        self._closed = False
+        self._active_sync_calls = 0
+        self._active_attempts: set[tuple[str, str]] = set()
+        self._active_call_tokens: dict[object, tuple[str, str]] = {}
+        self._cancelled_attempts: set[tuple[str, str]] = set()
+        self._cancelled_tombstone_order: deque[tuple[str, str]] = deque()
+        self._max_cancelled_tombstones = 1024
 
     async def transcribe(self, spec: dict[str, Any], attempt_id: str, *, progress=None) -> dict[str, Any]:
         if progress:
@@ -61,11 +98,156 @@ class CloudAsrTranscriber:
         language = spec["transcription"].get("language", {})
         if language.get("mode") == "fixed" and language.get("value"):
             fields["language"] = language["value"]
-        payload = await asyncio.to_thread(self.request_fn, _audio_url(profile["base_url"]), source, fields, headers)
+        key = (str(spec["workflow_id"]), attempt_id)
+        if self._is_cancelled(key):
+            self._clear_cancelled(key)
+            raise CloudAttemptCancelled(f"cloud ASR attempt cancelled: {attempt_id}")
+        try:
+            payload = await self._run_native_request(
+                key,
+                _audio_url(profile["base_url"]),
+                source,
+                fields,
+                headers,
+            )
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
+            if self._is_cancelled(key):
+                self._clear_cancelled(key)
+                raise CloudAttemptCancelled(
+                    f"cloud ASR attempt cancelled: {attempt_id}"
+                ) from exc
+            raise
+        if self._is_cancelled(key):
+            self._clear_cancelled(key)
+            raise CloudAttemptCancelled(f"cloud ASR attempt cancelled: {attempt_id}")
+        self._clear_cancelled(key)
         markdown = _format_response(payload)
         markdown = _apply_replacements(markdown, spec["transcription"].get("postprocess", {}).get("replacements", []))
         # Artifact materialization and revision naming belong to the supervisor.
         return {"kind": "transcript_markdown", "text": markdown}
+
+    def cancel_attempt(self, workflow_id: str, attempt_id: str) -> int:
+        key = (str(workflow_id), str(attempt_id))
+        with self._lifecycle:
+            self._remember_cancelled_locked(key)
+            return int(key in self._active_attempts)
+
+    def close(self) -> None:
+        """Stop new requests and wait a bounded time for network threads.
+
+        Python cannot safely kill a blocking urllib worker. Marking active
+        attempts cancelled prevents late results from being committed; the
+        bounded wait keeps runtime shutdown from hanging indefinitely on a
+        remote endpoint that ignores its timeout.
+        """
+
+        with self._lifecycle:
+            if self._closed:
+                return None
+            self._closing = True
+            for key in self._active_attempts:
+                self._remember_cancelled_locked(key)
+            deadline = time.monotonic() + self.close_wait_seconds
+            while self._active_sync_calls:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._lifecycle.wait(timeout=remaining)
+            self._closed = True
+        return None
+
+    async def _run_native_request(
+        self,
+        key: tuple[str, str],
+        url: str,
+        source: Path,
+        fields: dict[str, Any],
+        headers: dict[str, str],
+    ) -> dict[str, Any]:
+        loop = asyncio.get_running_loop()
+        token = self._register_native_call(key)
+        future = loop.create_future()
+        native_thread = threading.Thread(
+            target=self._native_request_runner,
+            args=(token, loop, future, url, source, fields, headers),
+            name=f"cloud-asr-{key[0]}-{key[1]}",
+            daemon=True,
+        )
+        try:
+            native_thread.start()
+        except BaseException:
+            # Thread creation is the only path without a native runner
+            # finally block available to debit the reservation.
+            self._finish_native_call(token)
+            raise
+        return await future
+
+    def _register_native_call(self, key: tuple[str, str]):
+        with self._lifecycle:
+            if self._closing or self._closed:
+                raise RuntimeError("CLOUD_TRANSCRIBER_CLOSED: no new requests accepted")
+            token = object()
+            self._active_call_tokens[token] = key
+            self._active_sync_calls += 1
+            self._active_attempts.add(key)
+            return token
+
+    def _native_request_runner(self, token, loop, future, *args) -> None:
+        try:
+            result = self.request_fn(*args)
+        except BaseException as exc:
+            self._deliver_future(loop, future, exception=exc)
+        else:
+            self._deliver_future(loop, future, result=result)
+        finally:
+            # Only the native runner owns the active-call decrement.  A
+            # cancelled asyncio task may leave urllib running in this daemon
+            # thread until the endpoint returns.
+            self._finish_native_call(token)
+
+    @staticmethod
+    def _deliver_future(loop, future, *, result=None, exception=None) -> None:
+        def deliver() -> None:
+            if future.done():
+                return
+            if exception is not None:
+                future.set_exception(exception)
+            else:
+                future.set_result(result)
+
+        try:
+            loop.call_soon_threadsafe(deliver)
+        except RuntimeError:
+            # The caller may have cancelled the asyncio.run loop already.
+            return
+
+    def _finish_native_call(self, token) -> None:
+        with self._lifecycle:
+            key = self._active_call_tokens.pop(token, None)
+            if key is None:
+                return
+            self._active_sync_calls = max(0, self._active_sync_calls - 1)
+            if not any(active_key == key for active_key in self._active_call_tokens.values()):
+                self._active_attempts.discard(key)
+            self._lifecycle.notify_all()
+
+    def _remember_cancelled_locked(self, key: tuple[str, str]) -> None:
+        if key in self._cancelled_attempts:
+            return
+        self._cancelled_attempts.add(key)
+        self._cancelled_tombstone_order.append(key)
+        while len(self._cancelled_tombstone_order) > self._max_cancelled_tombstones:
+            self._cancelled_attempts.discard(self._cancelled_tombstone_order.popleft())
+
+    def _clear_cancelled(self, key: tuple[str, str]) -> None:
+        with self._lifecycle:
+            self._cancelled_attempts.discard(key)
+
+    def _is_cancelled(self, key: tuple[str, str]) -> bool:
+        with self._lifecycle:
+            return key in self._cancelled_attempts
 
 
 class CloudAsrClient:

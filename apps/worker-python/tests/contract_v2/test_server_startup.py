@@ -7,12 +7,18 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from app.supervisor.server import V2StdioServer
 
 
 class _BinaryStdout:
+    def __init__(self, buffer: io.BytesIO) -> None:
+        self.buffer = buffer
+
+
+class _BinaryStdin:
     def __init__(self, buffer: io.BytesIO) -> None:
         self.buffer = buffer
 
@@ -99,6 +105,72 @@ class V2ServerStartupTests(unittest.TestCase):
                 self.assertEqual(result["pipeline_mode"], {"requested": "fake", "resolved": "fake"})
             finally:
                 server.registry.close()
+
+    def test_eof_closes_production_transcriber_even_when_supervisor_never_started(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch("app.supervisor.server.project_root", return_value=root), patch(
+                "app.supervisor.server.resolve_pipeline_mode", return_value="fake"
+            ):
+                server = V2StdioServer(pipeline_mode="fake")
+            close = Mock()
+            server.supervisor = SimpleNamespace(
+                _started=False,
+                _transcriber_closed=False,
+                transcriber=SimpleNamespace(close=close),
+            )
+            try:
+                with patch("sys.stdin", _BinaryStdin(io.BytesIO())):
+                    asyncio.run(server.run())
+                close.assert_called_once_with()
+            finally:
+                # server.run closes this registry in the tested path.
+                pass
+
+    def test_production_construction_failure_closes_untransferred_dispatcher(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            server = object.__new__(V2StdioServer)
+            server.registry = Mock()
+            server.secret_provider = Mock()
+            server._emit_event = Mock()
+            server._preloaded_inference_dependencies = (None,)
+            server._gpu_dispatcher = None
+            server._gpu_dispatcher_owned = False
+            server._shared_cuda_manager = None
+            server._gpu_execution_gate = None
+
+            manager = SimpleNamespace(
+                qwen_path=root / "qwen",
+                local_asr_batch_size=lambda: 4,
+                local_asr_max_batch_size=lambda: 8,
+            )
+            dispatcher = Mock()
+            gate = object()
+            hardware = SimpleNamespace(cuda_available=True, bf16_supported=False)
+
+            with patch(
+                "app.workflow.runtime_plan.profile_hardware",
+                return_value=hardware,
+            ), patch(
+                "app.models.manager.ModelManager",
+                return_value=manager,
+            ), patch(
+                "app.runtime.gpu_batch_scheduler.GpuExecutionGate",
+                return_value=gate,
+            ), patch(
+                "app.runtime.gpu_batch_scheduler.GpuBatchDispatcher",
+                return_value=dispatcher,
+            ), patch(
+                "app.pipeline.chunked_local.ChunkedLocalTranscriber",
+                side_effect=RuntimeError("transcriber construction failed"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "transcriber construction failed"):
+                    V2StdioServer._production_supervisor(server)
+
+            dispatcher.close.assert_called_once_with()
+            self.assertIsNone(server._gpu_dispatcher)
+            self.assertFalse(server._gpu_dispatcher_owned)
 
 
 if __name__ == "__main__":

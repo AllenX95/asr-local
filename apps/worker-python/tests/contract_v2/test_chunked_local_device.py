@@ -53,6 +53,35 @@ class ChunkedLocalDeviceTests(unittest.TestCase):
             self.assertEqual(Path(payload["job_workspace_dir"]), root / ".jobs" / "wf_cpu")
             manager_type.return_value.close_local_models.assert_called_once_with()
 
+    @mock.patch("app.pipeline.chunked_local.run_job")
+    @mock.patch("app.pipeline.chunked_local._validate_snapshot_paths")
+    @mock.patch("app.pipeline.chunked_local.ModelManager")
+    def test_forced_cpu_does_not_receive_shared_cuda_gate(self, manager_type, _validate, run_job):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            transcript_path = root / "transcript.md"
+            transcript_path.write_text("CPU transcript", encoding="utf-8")
+            run_job.return_value = {"md_path": str(transcript_path), "warnings": []}
+            manager_type.return_value.device_map.return_value = "cpu"
+            spec = {
+                "workflow_id": "wf_cpu_gate",
+                "source": {"path": str(root / "audio.wav")},
+                "output": {"directory": str(root)},
+                "runtime_plan": {"resolved_device": "cpu", "dtype": "float32"},
+                "transcription": {
+                    "language": {"mode": "auto", "value": None},
+                    "prompt_input": {"recording_background": "", "hotwords": [], "extra_instruction": ""},
+                    "postprocess": {"replacements": [], "keep_fillers": True, "auto_punctuation": True},
+                    "model_snapshot": {"components": []},
+                },
+            }
+            gate = object()
+            ChunkedLocalTranscriber(batch_executor=object(), execution_gate=gate)._transcribe_sync(
+                spec, "attempt_cpu_gate"
+            )
+            manager_type.assert_called_once_with(resolved_device="cpu", dtype="float32")
+            self.assertIsNone(run_job.call_args.kwargs["execution_gate"])
+
 
 if __name__ == "__main__":
     unittest.main()

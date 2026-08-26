@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import inspect
 import json
 import logging
 import sys
@@ -85,11 +86,29 @@ class V2StdioServer:
         self.requested_pipeline_mode = pipeline_mode
         self.pipeline_mode = resolve_pipeline_mode(pipeline_mode)
         self.startup_error: dict[str, Any] | None = None
+        self._gpu_dispatcher = None
+        # The server owns a dispatcher only while production construction is
+        # still in progress.  Once the production transcriber is returned,
+        # its close() owns the dispatcher and server shutdown must not race it.
+        self._gpu_dispatcher_owned = False
+        self._shared_cuda_manager = None
+        self._gpu_execution_gate = None
         if self.pipeline_mode == "production":
             try:
                 self._preload_production_dependencies()
                 self.supervisor = self._production_supervisor()
             except (ImportError, OSError, RuntimeError) as exc:
+                # A production factory may fail after publishing a dispatcher
+                # reference but before returning the transcriber (including a
+                # factory-level exception probe).  Close only while the server
+                # still owns that reference; a transferred dispatcher is
+                # closed by the production transcriber instead.
+                if self._gpu_dispatcher_owned and self._gpu_dispatcher is not None:
+                    try:
+                        self._gpu_dispatcher.close()
+                    finally:
+                        self._gpu_dispatcher = None
+                        self._gpu_dispatcher_owned = False
                 self.startup_error = _production_startup_error(exc)
                 self.supervisor = WorkflowSupervisor(self.registry, event_sink=self._emit_event)
         else:
@@ -131,30 +150,140 @@ class V2StdioServer:
         from app.pipeline.cloud_asr import CloudAsrTranscriber
         from app.pipeline.chunked_local import ChunkedLocalTranscriber
         from app.pipeline.router import ProfileRoutingTranscriber
+        from app.models.manager import ModelManager
+        from app.pipeline.segment_types import RuntimeKey
+        from app.runtime.gpu_batch_scheduler import GpuBatchDispatcher, GpuExecutionGate
+        from app.workflow.runtime_plan import profile_hardware
         from app.summary.openai_compatible import OpenAICompatibleSummaryGenerator
 
-        return WorkflowSupervisor(
-            self.registry,
-            transcriber=ProfileRoutingTranscriber(
+        dispatcher = None
+        transferred = False
+        try:
+            # One process owns one CUDA Qwen runtime.  The model remains
+            # lazy-loaded by the dispatcher, but its manager/key are fixed at
+            # runtime creation so workflows cannot silently mix model paths,
+            # devices, or dtypes.
+            preloaded = getattr(self, "_preloaded_inference_dependencies", (None,))
+            hardware = profile_hardware(preloaded[0] if preloaded else None)
+            if hardware.cuda_available:
+                dtype = "bfloat16" if hardware.bf16_supported else "float16"
+                gate = GpuExecutionGate()
+                shared_manager = ModelManager(
+                    resolved_device="cuda:0",
+                    dtype=dtype,
+                    execution_gate=gate,
+                )
+                runtime_key = RuntimeKey(
+                    model_name="qwen3_asr_1_7b",
+                    model_path=str(shared_manager.qwen_path),
+                    device="cuda:0",
+                    dtype=dtype,
+                )
+                dispatcher = GpuBatchDispatcher(
+                    shared_manager,
+                    runtime_key,
+                    target_batch_size=shared_manager.local_asr_batch_size(),
+                    hard_batch_size=shared_manager.local_asr_max_batch_size(),
+                    execution_gate=gate,
+                )
+                self._gpu_execution_gate = gate
+                self._shared_cuda_manager = shared_manager
+                self._gpu_dispatcher = dispatcher
+                self._gpu_dispatcher_owned = True
+
+            qwen_transcriber = ChunkedLocalTranscriber(
+                batch_executor=dispatcher,
+                execution_gate=self._gpu_execution_gate,
+            )
+            production_transcriber = ProfileRoutingTranscriber(
                 cloud=CloudAsrTranscriber(secret_provider=self.secret_provider),
-                qwen=ChunkedLocalTranscriber(),
-            ),
-            summary_generator=OpenAICompatibleSummaryGenerator(secret_provider=self.secret_provider),
-            event_sink=self._emit_event,
-        )
+                qwen=qwen_transcriber,
+            )
+            supervisor = WorkflowSupervisor(
+                self.registry,
+                transcriber=production_transcriber,
+                summary_generator=OpenAICompatibleSummaryGenerator(secret_provider=self.secret_provider),
+                event_sink=self._emit_event,
+            )
+            # The returned transcriber now owns dispatcher close.  Keep the
+            # server reference for diagnostics, but do not close it ahead of
+            # the transcriber during normal runtime shutdown.
+            transferred = True
+            self._gpu_dispatcher_owned = False
+            return supervisor
+        except BaseException:
+            # Construction can fail after the dispatcher thread has started
+            # (for example while wiring a profile or supervisor).  Until the
+            # production transcriber is successfully returned, the server is
+            # its owner and must close it directly and idempotently.
+            if dispatcher is not None and not transferred:
+                try:
+                    dispatcher.close()
+                finally:
+                    if self._gpu_dispatcher is dispatcher:
+                        self._gpu_dispatcher = None
+                    self._gpu_dispatcher_owned = False
+            raise
 
     async def run(self) -> int:
-        while not self.stopping:
-            raw_line = await asyncio.to_thread(sys.stdin.buffer.readline)
-            if not raw_line:
-                break
-            if not raw_line.strip():
-                continue
-            await self._handle_line(raw_line)
-        if self.supervisor._started:
-            await self.supervisor.shutdown(interrupt=True)
-        self.registry.close()
+        try:
+            while not self.stopping:
+                raw_line = await asyncio.to_thread(sys.stdin.buffer.readline)
+                if not raw_line:
+                    break
+                if not raw_line.strip():
+                    continue
+                await self._handle_line(raw_line)
+        finally:
+            # EOF and an exception in the stdio loop must release a production
+            # dispatcher even when no workflow ever called supervisor.start().
+            await self._shutdown_runtime()
+            self.registry.close()
         return 0
+
+    async def _shutdown_runtime(self) -> None:
+        supervisor = self.supervisor
+        transcriber = getattr(supervisor, "transcriber", None)
+        direct_close_completed = False
+        try:
+            if getattr(supervisor, "_started", False):
+                await supervisor.shutdown(interrupt=True)
+            else:
+                close = getattr(transcriber, "close", None)
+                if getattr(supervisor, "_transcriber_closed", False):
+                    direct_close_completed = True
+                elif callable(close):
+                    result = close()
+                    if inspect.isawaitable(result):
+                        await result
+                    direct_close_completed = True
+                    try:
+                        setattr(supervisor, "_transcriber_closed", True)
+                    except Exception:
+                        pass
+        finally:
+            try:
+                # If supervisor.shutdown itself failed before marking the
+                # adapter closed, make one last idempotent direct close
+                # attempt.
+                if not direct_close_completed and not getattr(supervisor, "_transcriber_closed", False):
+                    close = getattr(transcriber, "close", None)
+                    if callable(close):
+                        result = close()
+                        if inspect.isawaitable(result):
+                            await result
+            finally:
+                # This branch is only reachable for a dispatcher that was
+                # never transferred to a production transcriber.  A
+                # successfully wired transcriber owns the dispatcher and is
+                # intentionally excluded.  Keep it in an inner finally so a
+                # broken transcriber close cannot leak an untransferred GPU
+                # runtime during EOF/error shutdown.
+                if getattr(self, "_gpu_dispatcher_owned", False) and getattr(self, "_gpu_dispatcher", None) is not None:
+                    close = getattr(self._gpu_dispatcher, "close", None)
+                    if callable(close):
+                        close()
+                    self._gpu_dispatcher_owned = False
 
     async def _handle_line(self, raw_line: bytes) -> None:
         request_id = "unknown"
@@ -388,7 +517,7 @@ def _prompt_preview(params: dict[str, Any]) -> dict[str, Any]:
 
 def _error_code(error: Exception) -> str:
     message = str(error)
-    for code in ("STALE_ATTEMPT", "SEQUENCE_CONFLICT", "INVALID_TRANSITION", "CONTROL_NOT_SUPPORTED", "WORKFLOW_NOT_TERMINAL", "NOT_FOUND", "CREDENTIAL_REJECTED", "CREDENTIAL_REQUIRED", "SOURCE_NOT_FOUND", "SOURCE_UNREADABLE", "SOURCE_CHANGED", "OUTPUT_CONFLICT", "SUMMARY_INPUT_TOO_LARGE", "SUMMARY_RESULT_UNKNOWN", "MODEL_SNAPSHOT_MISMATCH", "CLOUD_PROFILE_REQUIRED", "UNSUPPORTED_PIPELINE_PROFILE"):
+    for code in ("STALE_ATTEMPT", "SEQUENCE_CONFLICT", "INVALID_TRANSITION", "CONTROL_NOT_SUPPORTED", "WORKFLOW_NOT_TERMINAL", "NOT_FOUND", "CREDENTIAL_REJECTED", "CREDENTIAL_REQUIRED", "SOURCE_NOT_FOUND", "SOURCE_UNREADABLE", "SOURCE_CHANGED", "OUTPUT_CONFLICT", "SUMMARY_INPUT_TOO_LARGE", "SUMMARY_RESULT_UNKNOWN", "MODEL_SNAPSHOT_MISMATCH", "RUNTIME_KEY_MISMATCH", "CLOUD_PROFILE_REQUIRED", "UNSUPPORTED_PIPELINE_PROFILE"):
         if code in message:
             return code
     return "INTERNAL"
