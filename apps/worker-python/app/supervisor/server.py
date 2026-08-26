@@ -299,6 +299,11 @@ class V2StdioServer:
                 if message["method"] != "runtime.hello":
                     raise ProtocolError("HANDSHAKE_REQUIRED", "runtime.hello must be the first request.", [], {})
                 self.handshaken = True
+                # Reconcile persisted active workflows before acknowledging the
+                # runtime.  Electron subscribes before hello/list, so the
+                # resulting interrupted events cannot be missed and a process
+                # crash never leaves stale `running` state in the UI.
+                await self.supervisor.start()
                 await self._respond(
                     request_id,
                     ok=True,
