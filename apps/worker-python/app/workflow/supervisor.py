@@ -504,7 +504,17 @@ class WorkflowSupervisor:
         else:
             running["attempt"]["stage_attempts"]["transcription"] += 1
             transcribing = _transition(running, status="running", stage="transcribing", clock=self.clock())
-            transcribing["progress"] = {**transcribing.get("progress", {}), "stage_ratio": 0.05, "overall_ratio": 0.08, "queue_position": None, "detail": "正在加载音频并执行语音识别与说话人分析"}
+            transcribing["progress"] = {
+                **transcribing.get("progress", {}),
+                "stage_ratio": 0.05,
+                "overall_ratio": 0.08,
+                "queue_position": None,
+                "processed_ms": None,
+                "total_ms": None,
+                "completed_chunks": None,
+                "total_chunks": None,
+                "detail": "正在加载音频并执行语音识别与说话人分析",
+            }
             event = self._event(transcribing, "progress")
             self.registry.save_snapshot(transcribing, event)
             await self._publish(event)
@@ -690,13 +700,46 @@ class WorkflowSupervisor:
                 return
             now = self.clock()
             next_snapshot = json.loads(json.dumps(current))
+            progress = next_snapshot["progress"]
             previous_phase = next_snapshot["progress"].get("phase")
             phase = str(update.get("phase") or previous_phase or "transcribing")
-            next_snapshot["progress"]["phase"] = phase
-            next_snapshot["progress"]["detail"] = str(update.get("detail") or next_snapshot["progress"].get("detail") or phase)
+            progress["phase"] = phase
+            progress["detail"] = str(update.get("detail") or progress.get("detail") or phase)
             if previous_phase != phase:
-                next_snapshot["progress"]["phase_started_at"] = now
-            next_snapshot["progress"]["heartbeat_at"] = now
+                progress["phase_started_at"] = now
+
+            pipeline_ratio = update.get("progress")
+            if isinstance(pipeline_ratio, (int, float)) and not isinstance(pipeline_ratio, bool):
+                normalized_ratio = max(0.0, min(1.0, float(pipeline_ratio)))
+                # The adapter reports progress across the complete local
+                # transcription pipeline. Workflow v2 reserves 3%-68% of its
+                # overall bar for that stage, including Pyannote and ASR.
+                progress["stage_ratio"] = max(float(progress.get("stage_ratio") or 0.0), normalized_ratio)
+                progress["overall_ratio"] = max(
+                    float(progress.get("overall_ratio") or 0.0),
+                    0.03 + (0.65 * normalized_ratio),
+                )
+
+            for source_key, target_key in (("processed_ms", "processed_ms"), ("total_ms", "total_ms")):
+                value = update.get(source_key)
+                if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+                    progress[target_key] = value
+
+            total_chunks = update.get("normalized_segment_count")
+            completed_chunks: Any = 0 if total_chunks is not None else None
+            if update.get("current_segment_index") is not None:
+                total_chunks = update.get("segment_count")
+                completed_chunks = update.get("current_segment_index")
+            if isinstance(total_chunks, int) and not isinstance(total_chunks, bool) and total_chunks > 0:
+                previous_total = progress.get("total_chunks")
+                progress["total_chunks"] = max(previous_total if isinstance(previous_total, int) else 0, total_chunks)
+            if isinstance(completed_chunks, int) and not isinstance(completed_chunks, bool) and completed_chunks >= 0:
+                previous_completed = progress.get("completed_chunks")
+                completed = max(previous_completed if isinstance(previous_completed, int) else 0, completed_chunks)
+                known_total = progress.get("total_chunks")
+                progress["completed_chunks"] = min(completed, known_total) if isinstance(known_total, int) else completed
+
+            progress["heartbeat_at"] = now
             next_snapshot["sequence"] += 1
             next_snapshot["timestamps"]["updated_at"] = now
             event = self._event(next_snapshot, "heartbeat" if heartbeat else "phase_progress", data={"phase": phase, "heartbeat": heartbeat})

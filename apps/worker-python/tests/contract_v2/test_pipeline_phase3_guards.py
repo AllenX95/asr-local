@@ -234,6 +234,7 @@ class PipelineGuardTests(unittest.TestCase):
                 return SimpleNamespace(speaker_diarization=FakeAnnotation())
 
         events: list[str] = []
+        progress_updates: list[dict] = []
 
         class FakeQwen:
             def transcribe(self, *, audio, context, language, return_time_stamps):
@@ -299,13 +300,24 @@ class PipelineGuardTests(unittest.TestCase):
                 "app.pipeline.job_runner.load_and_normalize_audio",
                 return_value=(np.zeros(32_000, dtype=np.float32), 16_000, "fake"),
             ), patch("app.pipeline.job_runner.cleanup_job_cache"):
-                result = run_job(payload, model_manager=FakeManager())
+                result = run_job(
+                    payload,
+                    emit=lambda _job_id, update: progress_updates.append(update),
+                    model_manager=FakeManager(),
+                )
 
             self.assertEqual(result["segments"], 2)
             self.assertTrue(Path(result["md_path"]).is_file())
             self.assertTrue(Path(result["transcript_json_path"]).is_file())
             self.assertLess(events.index("pyannote_release"), events.index("qwen_load"))
             self.assertIn("qwen_batch_2", events)
+            segmenting = next(update for update in progress_updates if update["stage"] == "segmenting")
+            self.assertEqual(segmenting["normalized_segment_count"], 2)
+            transcribing = [update for update in progress_updates if update["stage"] == "transcribing"]
+            self.assertEqual(
+                [(update["current_segment_index"], update["segment_count"]) for update in transcribing],
+                [(1, 2), (2, 2)],
+            )
 
 
 if __name__ == "__main__":

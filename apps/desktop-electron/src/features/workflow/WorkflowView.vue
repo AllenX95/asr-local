@@ -6,6 +6,7 @@ import type { PipelineProfile, WorkflowCatalogs, WorkflowSummaryProfile, Workflo
 import { useAppStore } from '../../stores/appStore';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { taskControlActions } from '../../workflows/taskControls';
+import { chunkProgressLabel } from '../../workflows/progress';
 import type { WorkflowDraft, WorkflowSnapshot } from '../../workflows/types';
 import { nextBaseNameForAudioSelection } from './workflowNaming';
 import { createTaskCenterState, toggleDiagnostics, toggleResummary } from './taskCenterState';
@@ -462,7 +463,8 @@ function progressSummary(snapshot: WorkflowSnapshot): string {
     const position = snapshot.progress.queue_position;
     return typeof position === 'number' ? `排队第 ${position + 1} 位` : '等待调度';
   }
-  return statusLabel(snapshot);
+  const chunks = chunkProgressLabel(snapshot.progress);
+  return chunks ? `${statusLabel(snapshot)} · ${chunks}` : statusLabel(snapshot);
 }
 
 function updatedAt(snapshot: WorkflowSnapshot): string {
@@ -656,6 +658,7 @@ function phaseLabel(value: string | null | undefined): string {
               <dl class="progress-details">
                 <div><dt>当前阶段</dt><dd>{{ statusLabel(snapshot) }} · {{ percent(snapshot.progress.stage_ratio) }}</dd></div>
                 <div v-if="snapshot.status === 'queued'"><dt>队列位置</dt><dd>{{ progressSummary(snapshot) }}</dd></div>
+                <div v-if="chunkProgressLabel(snapshot.progress)"><dt>ASR 分块</dt><dd>{{ chunkProgressLabel(snapshot.progress) }}</dd></div>
                 <div><dt>音频进度</dt><dd>{{ formatDuration(snapshot.progress.processed_ms) }} / {{ formatDuration(snapshot.progress.total_ms) }}</dd></div>
                 <div><dt>当前步骤</dt><dd>{{ snapshot.progress.detail || '等待工作进程上报详细信息' }}</dd></div>
                 <div v-if="snapshot.progress.phase"><dt>运行子阶段</dt><dd>{{ phaseLabel(snapshot.progress.phase) }}</dd></div>

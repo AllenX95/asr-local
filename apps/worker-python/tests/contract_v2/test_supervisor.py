@@ -45,7 +45,17 @@ class ProgressBlockingTranscriber(BlockingTranscriber):
     async def transcribe(self, spec: dict, attempt_id: str, *, progress=None) -> dict:
         del spec, attempt_id
         if progress:
-            progress({"phase": "model_loading", "detail": "正在加载 Qwen3-ASR 模型"})
+            progress(
+                {
+                    "phase": "transcribing",
+                    "detail": "正在执行 Qwen3-ASR 分块转录",
+                    "progress": 0.6,
+                    "processed_ms": 50_000,
+                    "total_ms": 100_000,
+                    "current_segment_index": 5,
+                    "segment_count": 10,
+                }
+            )
         self.started.set()
         await self.release.wait()
         return {"kind": "transcript_markdown", "path": "", "text": "controlled transcript"}
@@ -312,8 +322,13 @@ class SupervisorTests(unittest.TestCase):
                 await asyncio.sleep(0.035)
                 snapshot = registry.get_snapshot(workflow_id)
                 self.assertEqual(snapshot["stage"], "transcribing")
-                self.assertEqual(snapshot["progress"]["overall_ratio"], 0.08)
-                self.assertEqual(snapshot["progress"]["phase"], "model_loading")
+                self.assertAlmostEqual(snapshot["progress"]["overall_ratio"], 0.42)
+                self.assertEqual(snapshot["progress"]["stage_ratio"], 0.6)
+                self.assertEqual(snapshot["progress"]["phase"], "transcribing")
+                self.assertEqual(snapshot["progress"]["processed_ms"], 50_000)
+                self.assertEqual(snapshot["progress"]["total_ms"], 100_000)
+                self.assertEqual(snapshot["progress"]["completed_chunks"], 5)
+                self.assertEqual(snapshot["progress"]["total_chunks"], 10)
                 self.assertIn("heartbeat_at", snapshot["progress"])
                 self.assertGreater(snapshot["sequence"], 4)
                 transcriber.release.set()

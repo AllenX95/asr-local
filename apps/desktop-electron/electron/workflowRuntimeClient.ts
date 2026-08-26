@@ -12,6 +12,9 @@ export class WorkflowRuntimeClient extends EventEmitter {
   private pending = new Map<string, PendingRequest>()
   private nextRequestId = 0
   private starting: Promise<void> | null = null
+  private shuttingDown = false
+  private restartTimer: NodeJS.Timeout | null = null
+  private restartAttemptedForOutage = false
 
   constructor(private readonly projectRoot: string, private readonly options: { stderrSink?: (text: string) => void } = {}) { super() }
 
@@ -21,8 +24,16 @@ export class WorkflowRuntimeClient extends EventEmitter {
   }
 
   async shutdown(): Promise<void> {
+    this.shuttingDown = true
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer)
+      this.restartTimer = null
+    }
     const child = this.child
-    if (!child) return
+    if (!child) {
+      this.shuttingDown = false
+      return
+    }
     this.emit('runtime-status', { state: 'stopping', occurred_at: new Date().toISOString(), detail: '正在停止 Python Runtime' })
     try {
       await this.send('runtime.shutdown', { mode: 'interrupt', grace_ms: 10_000 }, undefined, 12_000)
@@ -36,6 +47,7 @@ export class WorkflowRuntimeClient extends EventEmitter {
     })
     this.child = null
     this.emit('runtime-status', { state: 'stopped', occurred_at: new Date().toISOString(), detail: 'Python Runtime 已停止' })
+    this.shuttingDown = false
   }
 
   private async ensureStarted(): Promise<void> {
@@ -82,8 +94,10 @@ export class WorkflowRuntimeClient extends EventEmitter {
       const error = new Error(`Workflow runtime exited (code=${code}, signal=${signal})`)
       for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(error) }
       this.pending.clear()
+      if (this.shuttingDown) return
       this.emit('unavailable', { code, signal })
       this.emit('runtime-status', { state: 'unavailable', occurred_at: new Date().toISOString(), detail: `Python Runtime 意外退出 (code=${code}, signal=${signal})` })
+      this.scheduleAutomaticRestart()
     })
     child.once('error', (error) => {
       if (this.child === child) this.child = null
@@ -100,6 +114,21 @@ export class WorkflowRuntimeClient extends EventEmitter {
       throw new Error('Production workflow runtime did not resolve production pipeline mode')
     }
     this.emit('runtime-status', { state: 'ready', occurred_at: new Date().toISOString(), detail: 'Python Runtime v2 已就绪', pid: child.pid })
+    this.restartAttemptedForOutage = false
+  }
+
+  private scheduleAutomaticRestart(): void {
+    if (this.shuttingDown || this.restartTimer || this.restartAttemptedForOutage) return
+    this.restartAttemptedForOutage = true
+    this.emit('runtime-status', { state: 'starting', occurred_at: new Date().toISOString(), detail: 'Python Runtime 意外退出，正在自动重启' })
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null
+      if (this.shuttingDown || this.child) return
+      void this.ensureStarted().catch(() => {
+        // start() already emits a diagnostic runtime status. Keep the automatic
+        // retry bounded to one attempt for this outage to avoid a crash loop.
+      })
+    }, 1_000)
   }
 
   private send(method: string, params: Record<string, unknown>, operationId?: string, timeoutMs = 30_000): Promise<unknown> {

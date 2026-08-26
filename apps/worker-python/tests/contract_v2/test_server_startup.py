@@ -8,7 +8,7 @@ import tempfile
 import threading
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from app.supervisor.server import V2StdioServer
 
@@ -103,6 +103,31 @@ class V2ServerStartupTests(unittest.TestCase):
                     server._dispatch({"method": "runtime.capabilities", "params": {}})
                 )
                 self.assertEqual(result["pipeline_mode"], {"requested": "fake", "resolved": "fake"})
+            finally:
+                server.registry.close()
+
+    def test_hello_starts_supervisor_before_runtime_is_acknowledged(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch("app.supervisor.server.project_root", return_value=root), patch(
+                "app.supervisor.server.resolve_pipeline_mode", return_value="fake"
+            ):
+                server = V2StdioServer(pipeline_mode="fake")
+            server.supervisor = SimpleNamespace(start=AsyncMock())
+            try:
+                async def exercise_protocol() -> None:
+                    output = io.BytesIO()
+                    with patch("sys.stdout", _BinaryStdout(output)):
+                        await server._handle_line(
+                            b'{"protocol":"asr-local-workflow","protocol_version":2,'
+                            b'"kind":"request","request_id":"req_hello_start",'
+                            b'"method":"runtime.hello","params":{"supported_versions":[2]}}\n'
+                        )
+                    server.supervisor.start.assert_awaited_once_with()
+                    response = json.loads(output.getvalue())
+                    self.assertTrue(response["ok"])
+
+                asyncio.run(exercise_protocol())
             finally:
                 server.registry.close()
 

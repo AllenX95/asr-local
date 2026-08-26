@@ -94,6 +94,8 @@ export interface WorkflowProgress {
   queue_position?: number | null
   processed_ms?: number | null
   total_ms?: number | null
+  completed_chunks?: number | null
+  total_chunks?: number | null
   detail?: string | null
   phase?: string | null
   phase_started_at?: string | null

@@ -100,4 +100,63 @@ describe('WorkflowRuntimeClient cold start single-flight', () => {
     expect(firstState).toBe('resolved')
     expect(secondState).toBe('resolved')
   })
+
+  it('performs one bounded automatic restart after an unexpected exit', async () => {
+    const firstChild = makeFakeChild()
+    const restartedChild = makeFakeChild()
+    vi.mocked(spawn).mockReturnValueOnce(firstChild).mockReturnValueOnce(restartedChild)
+    const client = new WorkflowRuntimeClient('E:/asr-local')
+    const statuses: string[] = []
+    client.on('runtime-status', (status: { state: string }) => statuses.push(status.state))
+
+    const request = client.request('runtime.capabilities', {})
+    await Promise.resolve()
+    const hello = messages(firstChild)[0]
+    firstChild.stdout.push(`${JSON.stringify({ kind: 'response', request_id: hello.request_id, ok: true, result: { selected_version: 2 } })}\n`)
+    await vi.waitFor(() => expect(messages(firstChild)).toHaveLength(2))
+    const capabilityRequest = messages(firstChild)[1]
+    firstChild.stdout.push(`${JSON.stringify({ kind: 'response', request_id: capabilityRequest.request_id, ok: true, result: {} })}\n`)
+    await request
+
+    firstChild.emit('exit', 3221225477, null)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(spawn).toHaveBeenCalledTimes(2)
+    expect(messages(restartedChild).map((message) => message.method)).toEqual(['runtime.hello'])
+    expect(statuses).toContain('unavailable')
+
+    const restartedHello = messages(restartedChild)[0]
+    restartedChild.stdout.push(`${JSON.stringify({ kind: 'response', request_id: restartedHello.request_id, ok: true, result: { selected_version: 2 } })}\n`)
+    await vi.waitFor(() => expect(statuses.at(-1)).toBe('ready'))
+  })
+
+  it('does not report unavailable or restart during an intentional shutdown', async () => {
+    const child = makeFakeChild()
+    vi.mocked(spawn).mockReturnValue(child)
+    const client = new WorkflowRuntimeClient('E:/asr-local')
+    const statuses: string[] = []
+    client.on('runtime-status', (status: { state: string }) => statuses.push(status.state))
+
+    const request = client.request('runtime.capabilities', {})
+    await Promise.resolve()
+    const hello = messages(child)[0]
+    child.stdout.push(`${JSON.stringify({ kind: 'response', request_id: hello.request_id, ok: true, result: { selected_version: 2 } })}\n`)
+    await vi.waitFor(() => expect(messages(child)).toHaveLength(2))
+    const capabilityRequest = messages(child)[1]
+    child.stdout.push(`${JSON.stringify({ kind: 'response', request_id: capabilityRequest.request_id, ok: true, result: {} })}\n`)
+    await request
+
+    const shutdown = client.shutdown()
+    await vi.waitFor(() => expect(messages(child).at(-1)?.method).toBe('runtime.shutdown'))
+    const shutdownRequest = messages(child).at(-1)!
+    child.stdout.push(`${JSON.stringify({ kind: 'response', request_id: shutdownRequest.request_id, ok: true, result: {} })}\n`)
+    await Promise.resolve()
+    await Promise.resolve()
+    child.emit('exit', 0, null)
+    await shutdown
+    await vi.advanceTimersByTimeAsync(2_000)
+
+    expect(spawn).toHaveBeenCalledTimes(1)
+    expect(statuses).not.toContain('unavailable')
+    expect(statuses.at(-1)).toBe('stopped')
+  })
 })
