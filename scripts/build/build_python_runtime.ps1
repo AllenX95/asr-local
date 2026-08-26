@@ -9,7 +9,7 @@ $WorkerVenv = Join-Path $ProjectRoot 'apps\worker-python\.venv'
 $RuntimeDir = Join-Path $DesktopDir 'runtime\python'
 $RuntimePython = Join-Path $RuntimeDir 'python.exe'
 $VersionFile = Join-Path $RuntimeDir 'ASR_LOCAL_RUNTIME_VERSION'
-$ExpectedVersion = 'python-3.12.2+qwen-pyannote-single-runtime-v5'
+$ExpectedVersion = 'python-3.12.2+qwen-pyannote-single-runtime-v6'
 
 if ((Test-Path $RuntimePython) -and (Test-Path $VersionFile) -and ((Get-Content -Raw $VersionFile).Trim() -eq $ExpectedVersion) -and -not $Force) {
     Write-Host "Python runtime is already current: $RuntimeDir"
@@ -78,7 +78,7 @@ Set-Content -LiteralPath $VersionFile -Value $ExpectedVersion -Encoding ascii
 
 Write-Host 'Validating portable runtime imports...'
 $env:PYTHONDONTWRITEBYTECODE = '1'
-& $RuntimePython -X utf8 -c "import sqlite3, torch, transformers, qwen_asr, soundfile, pyannote.audio; print('runtime-ok', torch.__version__, transformers.__version__)"
+& $RuntimePython -X utf8 -c "from pathlib import Path; import imageio_ffmpeg, sqlite3, torch, transformers, qwen_asr, soundfile, pyannote.audio; ffmpeg = Path(imageio_ffmpeg.get_ffmpeg_exe()); assert ffmpeg.is_file(), f'missing ffmpeg: {ffmpeg}'; print('runtime-ok', torch.__version__, transformers.__version__, ffmpeg)"
 if ($LASTEXITCODE -ne 0) {
     throw "Portable Python runtime validation failed with exit code $LASTEXITCODE"
 }
