@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import warnings
+from contextlib import nullcontext
 
 from app.config import load_models_config, project_root
 from app.logging_utils import get_logger
@@ -13,8 +14,23 @@ QWEN_MODEL_KEY = "qwen3_asr_1_7b"
 LOCAL_ASR_MODEL_NAMES = {
     QWEN_MODEL_KEY: "Qwen/Qwen3-ASR-1.7B",
 }
+
+# Keep the runtime's normal work size separate from the limit passed to the
+# Qwen wrapper.  The normal size is a scheduling choice; the hard maximum is a
+# model-loader safety contract and may be raised independently after a real
+# workload benchmark.
+LOCAL_ASR_OPERATIONAL_BATCH_SIZE = 4
+QWEN_HARD_MAX_INFERENCE_BATCH_SIZE = 8
+
+
 class ModelManager:
-    def __init__(self, *, resolved_device: str | None = None, dtype: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        resolved_device: str | None = None,
+        dtype: str | None = None,
+        execution_gate=None,
+    ) -> None:
         if resolved_device not in {None, "cpu", "cuda:0"}:
             raise ValueError(f"unsupported resolved device: {resolved_device}")
         if dtype not in {None, "float16", "float32", "bfloat16"}:
@@ -23,6 +39,7 @@ class ModelManager:
         self._config = load_models_config()
         self._resolved_device = resolved_device
         self._dtype = dtype
+        self.execution_gate = execution_gate
         self._qwen_model = None
         self._pyannote_pipeline = None
         self._torch = None
@@ -77,11 +94,39 @@ class ModelManager:
         return LOCAL_ASR_MODEL_NAMES[QWEN_MODEL_KEY]
 
     def local_asr_batch_size(self) -> int:
-        # Qwen segments are intentionally serialized.  Pyannote has already
-        # bounded the request size, and a batch of two can double the decoder
-        # activation peak on 16 GiB cards.  Keep this conservative until a
-        # hardware gate proves a larger batch is safe.
-        return 1
+        """Return the default operational batch size for local ASR."""
+
+        return LOCAL_ASR_OPERATIONAL_BATCH_SIZE
+
+    def local_asr_max_batch_size(self) -> int:
+        """Return the Qwen loader's hard batch ceiling."""
+
+        return QWEN_HARD_MAX_INFERENCE_BATCH_SIZE
+
+    def local_asr_runtime_key(self):
+        """Return the canonical runtime identity used by the GPU dispatcher."""
+
+        from app.pipeline.segment_types import RuntimeKey
+
+        dtype = self._dtype
+        if dtype is None:
+            dtype = "float16" if self.device_map().startswith("cuda") else "float32"
+        return RuntimeKey(
+            model_name=QWEN_MODEL_KEY,
+            model_path=str(self.qwen_path),
+            device=self.device_map(),
+            dtype=str(dtype),
+        )
+
+    def local_asr_uses_integrated_diarization(self) -> bool:
+        """Whether the active local ASR model emits speaker diarization.
+
+        Qwen3-ASR is used with external Pyannote diarization in this runtime;
+        keeping this capability explicit prevents accidental whole-recording
+        routing through the integrated-diarization path.
+        """
+
+        return False
 
     def get_local_asr_model(self):
         return self.get_qwen_model()
@@ -109,10 +154,19 @@ class ModelManager:
                 str(self.qwen_path),
                 dtype=torch_dtype,
                 device_map=device_map,
-                max_inference_batch_size=self.local_asr_batch_size(),
+                max_inference_batch_size=self.local_asr_max_batch_size(),
                 max_new_tokens=256,
             )
         return self._qwen_model
+
+    def clear_cuda_cache(self) -> None:
+        """Release temporary CUDA allocator blocks without unloading models."""
+
+        try:
+            if self.torch.cuda.is_available():
+                self.torch.cuda.empty_cache()
+        except Exception:
+            LOGGER.debug("failed to clear CUDA cache", exc_info=True)
 
     def get_pyannote_pipeline(self):
         if self._pyannote_pipeline is None:
@@ -163,18 +217,22 @@ class ModelManager:
     def close_pyannote_pipeline(self) -> None:
         pipeline = self._pyannote_pipeline
         self._pyannote_pipeline = None
-        if pipeline is not None:
-            try:
-                move_to = getattr(pipeline, "to", None)
-                if callable(move_to):
-                    move_to(self.torch.device("cpu"))
-            except Exception:
-                LOGGER.debug("failed to move Pyannote pipeline to CPU during cleanup", exc_info=True)
-        release_gpu_resources(pipeline, torch_module=self._torch, label="pyannote")
+        with self._gate_context():
+            if pipeline is not None:
+                try:
+                    move_to = getattr(pipeline, "to", None)
+                    if callable(move_to):
+                        move_to(self.torch.device("cpu"))
+                except Exception:
+                    LOGGER.debug("failed to move Pyannote pipeline to CPU during cleanup", exc_info=True)
+            release_gpu_resources(pipeline, torch_module=self._torch, label="pyannote")
 
     def close_local_models(self) -> None:
         self.close_qwen_model()
         self.close_pyannote_pipeline()
+
+    def _gate_context(self):
+        return self.execution_gate if self.execution_gate is not None else nullcontext()
 
     def runtime_summary(self, include_device: bool = True) -> dict:
         summary = {

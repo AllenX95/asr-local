@@ -24,6 +24,10 @@ from .state_machine import create_initial_snapshot, mark_interrupted, retry_snap
 class Transcriber(Protocol):
     async def transcribe(self, spec: dict[str, Any], attempt_id: str, *, progress: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]: ...
 
+    def cancel_attempt(self, workflow_id: str, attempt_id: str) -> Any: ...
+
+    def close(self) -> Any: ...
+
 
 class SummaryGenerator(Protocol):
     async def summarize(self, spec: dict[str, Any], transcript: dict[str, Any], attempt_id: str) -> dict[str, Any]: ...
@@ -97,6 +101,7 @@ class WorkflowSupervisor:
         self._control_events: dict[str, asyncio.Event] = {}
         self._enqueued_workflows: set[str] = set()
         self._mutation_locks: dict[str, asyncio.Lock] = {}
+        self._transcriber_closed = False
 
     async def start(self) -> None:
         if self._started:
@@ -126,6 +131,13 @@ class WorkflowSupervisor:
                 self._queue.task_done()
         self._enqueued_workflows.clear()
         self._started = False
+        if not self._transcriber_closed:
+            close = getattr(self.transcriber, "close", None)
+            if callable(close):
+                result = close()
+                if inspect.isawaitable(result):
+                    await result
+            self._transcriber_closed = True
 
     async def submit(self, draft: dict[str, Any], *, operation_id: str) -> dict[str, Any]:
         await self.start()
@@ -278,6 +290,12 @@ class WorkflowSupervisor:
         else:
             control_event.set()
         await self._publish(event)
+        if params["action"] == "cancel":
+            cancel = getattr(self.transcriber, "cancel_attempt", None)
+            if callable(cancel):
+                cancellation_result = cancel(params["workflow_id"], params["expected_attempt_id"])
+                if inspect.isawaitable(cancellation_result):
+                    await cancellation_result
         return result
 
     async def retry(self, params: dict[str, Any], *, operation_id: str) -> dict[str, Any]:
@@ -418,6 +436,20 @@ class WorkflowSupervisor:
             except Exception as exc:
                 snapshot = self.registry.get_snapshot(workflow_id)
                 if snapshot.get("status") in {"completed", "completed_with_warnings", "failed", "cancelled", "interrupted"}:
+                    continue
+                # A dedicated cancellation may arrive while a native model
+                # call is still in flight.  The dispatcher returns discarded
+                # outcomes for that attempt; never turn that expected path
+                # into a warning or failed workflow.
+                if (
+                    snapshot.get("control", {}).get("pending_action") == "cancel"
+                    or getattr(exc, "cancelled", False)
+                    or exc.__class__.__name__ in {"JobTerminated", "BatchAttemptCancelled"}
+                ):
+                    cancelled = _cancelled_snapshot(snapshot, self.clock())
+                    event = self._event(cancelled, "cancelled", data={"reason": str(exc)})
+                    self.registry.save_snapshot(cancelled, event)
+                    await self._publish(event)
                     continue
                 failed = _failed_snapshot(snapshot, exc, self.clock())
                 event = self._event(failed, "failed", data={"error": str(exc)})

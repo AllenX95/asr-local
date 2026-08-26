@@ -42,6 +42,22 @@ class ChunkedRouterTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_close_forwards_once_even_when_server_shutdown_repeats(self):
+        class Closable:
+            def __init__(self):
+                self.close_calls = 0
+
+            def close(self):
+                self.close_calls += 1
+
+        qwen = Closable()
+        cloud = Closable()
+        router = ProfileRoutingTranscriber(cloud=cloud, qwen=qwen)
+        router.close()
+        router.close()
+        self.assertEqual(qwen.close_calls, 1)
+        self.assertEqual(cloud.close_calls, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

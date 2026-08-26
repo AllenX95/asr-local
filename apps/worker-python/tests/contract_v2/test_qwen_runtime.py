@@ -9,11 +9,17 @@ from app.models.manager import ModelManager
 
 
 class QwenRuntimeTests(unittest.TestCase):
-    def test_qwen_uses_serial_segment_batch(self):
+    def test_qwen_uses_operational_batch_four(self):
         self.assertEqual(
             ModelManager().local_asr_batch_size(),
-            1,
+            4,
         )
+
+    def test_qwen_loader_has_hard_batch_ceiling_eight(self):
+        self.assertEqual(ModelManager().local_asr_max_batch_size(), 8)
+
+    def test_qwen_does_not_emit_integrated_diarization(self):
+        self.assertFalse(ModelManager().local_asr_uses_integrated_diarization())
 
     @mock.patch("qwen_asr.Qwen3ASRModel.from_pretrained")
     def test_qwen_loads_in_the_main_runtime(self, load_model):
@@ -26,7 +32,7 @@ class QwenRuntimeTests(unittest.TestCase):
             str(manager.qwen_path),
             dtype=manager.qwen_torch_dtype(),
             device_map=manager.device_map(),
-            max_inference_batch_size=1,
+            max_inference_batch_size=8,
             max_new_tokens=256,
         )
 
@@ -50,7 +56,7 @@ class QwenRuntimeTests(unittest.TestCase):
             str(manager.qwen_path),
             dtype="float32",
             device_map="cpu",
-            max_inference_batch_size=1,
+            max_inference_batch_size=8,
             max_new_tokens=256,
         )
 

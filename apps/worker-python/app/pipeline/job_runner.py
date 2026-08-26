@@ -14,16 +14,30 @@ from app.exporters import export_transcript_bundle
 from app.logging_utils import get_logger
 from app.models.manager import ModelManager
 from app.pipeline.cloud_asr import CloudAsrClient
+from app.pipeline.asr_batch import (
+    BatchResultCountError,
+    NullTranscriptionError,
+    detach_exception,
+    transcribe_with_isolation,
+)
 from app.pipeline.segment_planner import plan_segments
-from app.pipeline.segment_types import DiarizationTurn
+from app.pipeline.segment_types import AsrBatchItem, BatchItemIdentity, DiarizationTurn, Outcome, RuntimeKey
 from app.pipeline.pyannote_provider import PyannoteDiarizationProvider
+from app.runtime.gpu_batch_scheduler import (
+    BatchCancelledError,
+    DuplicateBatchIdentityError,
+    RuntimeKeyMismatchError,
+)
 from app.schemas import SpeakerSegment, TaskSpec, TranscriptSegment
 
 
 MIN_SEGMENT_MS = 800
 MERGE_GAP_MS = 300
 MAX_SEGMENT_MS = 30_000
-ASR_SEGMENT_BATCH_SIZE = 2
+# The operational batch is deliberately independent from the Qwen loader's
+# hard safety ceiling.  The latter is configured in ModelManager so a future
+# scheduler can raise the operational size without rebuilding the model.
+ASR_SEGMENT_BATCH_SIZE = 4
 DEFAULT_JOB_RETENTION_DAYS = 14
 DEFAULT_JOB_RETENTION_COUNT = 100
 KEEP_NORMALIZED_WAV_ENV = "ASR_LOCAL_KEEP_NORMALIZED_WAV"
@@ -38,9 +52,31 @@ class JobTerminated(RuntimeError):
     pass
 
 
-def run_job(payload: dict, emit=None, model_manager: ModelManager | None = None) -> dict:
+class BatchAttemptCancelled(JobTerminated):
+    """The shared dispatcher discarded this attempt after user cancellation."""
+
+    cancelled = True
+
+
+class BatchOutcomeFatalError(RuntimeError):
+    """A discarded GPU outcome that is not an explicit user cancellation."""
+
+    fatal = True
+
+
+def run_job(
+    payload: dict,
+    emit=None,
+    model_manager: ModelManager | None = None,
+    *,
+    batch_executor=None,
+    attempt_id: str | None = None,
+    execution_gate=None,
+) -> dict:
     task = TaskSpec.from_payload(payload)
     manager = model_manager or _MODEL_MANAGER
+    effective_attempt_id = str(attempt_id or payload.get("attempt_id") or "attempt-unknown")
+    effective_gate = execution_gate or getattr(manager, "execution_gate", None)
     manager.refresh_config()
     LOGGER.info(
         "job runner started | job_id=%s | source=%s | output_dir=%s | asr_backend=%s | diarization=%s",
@@ -110,6 +146,7 @@ def run_job(payload: dict, emit=None, model_manager: ModelManager | None = None)
         normalized_wav_path=normalized_wav_path,
         total_ms=total_ms,
         model_manager=manager,
+        execution_gate=effective_gate,
     )
     LOGGER.info(
         "speaker diarization finished | job_id=%s | raw_segment_count=%s",
@@ -172,6 +209,9 @@ def run_job(payload: dict, emit=None, model_manager: ModelManager | None = None)
         job_dir=job_dir,
         emit=emit,
         model_manager=manager,
+        batch_executor=batch_executor,
+        workflow_id=task.job_id,
+        attempt_id=effective_attempt_id,
         warnings=transcription_warnings,
     )
 
@@ -480,6 +520,7 @@ def build_speaker_segments(
     normalized_wav_path: Path,
     total_ms: int,
     model_manager: ModelManager | None = None,
+    execution_gate=None,
 ) -> list[SpeakerSegment]:
     manager = model_manager or _MODEL_MANAGER
     if not task.enable_speaker_diarization:
@@ -520,7 +561,10 @@ def build_speaker_segments(
         sample_rate,
         normalized_wav_path,
     )
-    turns = PyannoteDiarizationProvider(model_manager=manager).diarize(
+    turns = PyannoteDiarizationProvider(
+        model_manager=manager,
+        execution_gate=execution_gate,
+    ).diarize(
         audio=audio,
         sample_rate=sample_rate,
         uri=normalized_wav_path.name,
@@ -587,6 +631,9 @@ def transcribe_segments(
     job_dir: Path,
     emit=None,
     model_manager: ModelManager | None = None,
+    batch_executor=None,
+    workflow_id: str | None = None,
+    attempt_id: str | None = None,
     warnings: list[dict] | None = None,
 ) -> list[TranscriptSegment]:
     manager = model_manager or _MODEL_MANAGER
@@ -609,9 +656,30 @@ def transcribe_segments(
             processed_ms=0,
             payload={"asr_model": manager.local_asr_model_name()},
         )
-        model = manager.get_local_asr_model()
+        # CUDA production work is owned by the shared dispatcher.  A CPU
+        # workflow (or a legacy direct caller) keeps the task-local path.
+        model = None if batch_executor is not None else manager.get_local_asr_model()
         cloud_client = None
-        batch_size = min(ASR_SEGMENT_BATCH_SIZE, manager.local_asr_batch_size())
+        operational_batch_size = int(
+            getattr(manager, "local_asr_batch_size", lambda: ASR_SEGMENT_BATCH_SIZE)()
+        )
+        hard_batch_size = int(
+            getattr(
+                manager,
+                "local_asr_max_batch_size",
+                lambda: ASR_SEGMENT_BATCH_SIZE,
+            )()
+        )
+        dispatcher_batch_size = int(getattr(batch_executor, "target_batch_size", ASR_SEGMENT_BATCH_SIZE))
+        batch_size = max(
+            1,
+            min(
+                ASR_SEGMENT_BATCH_SIZE,
+                operational_batch_size,
+                hard_batch_size,
+                dispatcher_batch_size,
+            ),
+        )
     LOGGER.info(
         "starting ASR transcription | job_id=%s | asr_backend=%s | asr_profile=%s | segment_count=%s | batch_size=%s | language=%s | context_chars=%s | terms=%s",
         task.job_id,
@@ -657,6 +725,8 @@ def transcribe_segments(
             chunk_origins[segment_index] = input_start_ms
             batch_inputs.append((segment_index, segment, audio_chunk))
 
+        failure_reasons: dict[int, BaseException] = {}
+        batch_error: BaseException | None = None
         try:
             if task.asr_backend == "cloud":
                 transcriptions = transcribe_cloud_audio_batch(
@@ -675,24 +745,71 @@ def transcribe_segments(
                     context=context,
                     language=language,
                     job_id=task.job_id,
+                    failures=failure_reasons,
+                    clear_cache=getattr(manager, "clear_cuda_cache", None),
+                    batch_executor=batch_executor,
+                    workflow_id=workflow_id or task.job_id,
+                    attempt_id=attempt_id or "attempt-unknown",
+                    runtime_key=_runtime_key_for(manager, batch_executor),
                 )
-        except Exception as exc:
+        except (
+            BatchAttemptCancelled,
+            BatchOutcomeFatalError,
+            DuplicateBatchIdentityError,
+            RuntimeKeyMismatchError,
+        ):
+            # A dedicated user cancellation must bypass warning placeholders;
+            # runtime identity mismatches must also fail the workflow clearly.
+            raise
+        except Exception as caught:
             LOGGER.exception(
                 "ASR segment batch failed; continuing with warning placeholders | job_id=%s | batch_start=%s | batch_size=%s",
                 task.job_id,
                 batch_start,
                 len(batch_inputs),
             )
-            for segment_index, segment, _audio_chunk in batch_inputs:
+            batch_error = caught
+
+        if batch_error is not None:
+            transcriptions = {}
+            detached_failure = detach_exception(batch_error)
+            failure_reasons = {
+                segment_index: detached_failure
+                for segment_index, _segment, _audio_chunk in batch_inputs
+            }
+        check_job_control(
+            task,
+            job_dir,
+            emit=emit,
+            progress=batch_progress,
+            total_ms=total_ms,
+            processed_ms=batch_processed_ms,
+        )
+
+        failed_segment_count = 0
+        for segment_index, segment, audio_chunk in batch_inputs:
+            transcription_missing = segment_index not in transcriptions
+            transcription = transcriptions.get(segment_index)
+            failure_reason = failure_reasons.get(segment_index)
+            if transcription_missing or transcription is None or failure_reason is not None:
+                failed_segment_count += 1
+                if failure_reason is None:
+                    if _audio_chunk_is_empty(audio_chunk):
+                        failure_reason = ValueError("ASR input audio is empty")
+                    else:
+                        failure_reason = RuntimeError(
+                            "ASR model returned no transcription for segment"
+                        )
+                warning_code = _asr_warning_code(audio_chunk, failure_reason)
                 warning = {
-                    "code": "ASR_SEGMENT_FAILED",
+                    "code": warning_code,
                     "segment_id": segment.segment_id,
                     "segment_index": segment_index,
                     "start_ms": segment.start_ms,
                     "end_ms": segment.end_ms,
                     "speaker": canonical_speaker_name(segment.speaker),
-                    "message": str(exc),
-                    "retryable": True,
+                    "message": str(failure_reason),
+                    "retryable": warning_code != "ASR_EMPTY_AUDIO",
                 }
                 if warnings is not None:
                     warnings.append(warning)
@@ -707,31 +824,25 @@ def transcribe_segments(
                         language=None,
                     )
                 )
-            _emit(
-                emit,
-                task,
-                stage="transcribing",
-                progress=batch_progress,
-                total_ms=total_ms,
-                processed_ms=batch_processed_ms,
-                payload={
-                    "segment_error": "ASR_SEGMENT_FAILED",
-                    "segment_count": len(speaker_segments),
-                    "failed_segment_count": len(batch_inputs),
-                },
-            )
-            continue
-        check_job_control(
-            task,
-            job_dir,
-            emit=emit,
-            progress=batch_progress,
-            total_ms=total_ms,
-            processed_ms=batch_processed_ms,
-        )
-
-        for segment_index, segment, _audio_chunk in batch_inputs:
-            transcription = transcriptions.get(segment_index)
+                progress = 0.36 + (0.48 * segment_index / max(len(speaker_segments), 1))
+                _emit(
+                    emit,
+                    task,
+                    stage="transcribing",
+                    progress=progress,
+                    total_ms=total_ms,
+                    processed_ms=segment.end_ms,
+                    payload={
+                        "current_segment_index": segment_index,
+                        "segment_count": len(speaker_segments),
+                        "current_speaker_label": canonical_speaker_name(segment.speaker),
+                        "batch_size": batch_size,
+                        "asr_backend": task.asr_backend,
+                        "asr_profile_name": task.asr_profile_name,
+                        "segment_error": warning_code,
+                    },
+                )
+                continue
             text = (getattr(transcription, "text", "") or "").strip()
             detected_language = getattr(transcription, "language", None)
             expanded_segments = (
@@ -795,6 +906,25 @@ def transcribe_segments(
                 },
             )
 
+        if failed_segment_count:
+            _emit(
+                emit,
+                task,
+                stage="transcribing",
+                progress=batch_progress,
+                total_ms=total_ms,
+                processed_ms=batch_processed_ms,
+                payload={
+                    "segment_error": "ASR_SEGMENT_FAILED",
+                    "segment_count": len(speaker_segments),
+                    "failed_segment_count": failed_segment_count,
+                },
+            )
+
+    # Model responses and recursive retries can complete out of order.  The
+    # source segment boundaries are authoritative, so make the final contract
+    # explicitly timeline ordered while preserving input order for ties.
+    output.sort(key=lambda item: (item.start_ms, item.end_ms))
     return output
 
 
@@ -843,60 +973,151 @@ def transcribe_audio_batch(
     context: str,
     language: str | None,
     job_id: str,
+    *,
+    failures: dict[int, BaseException] | None = None,
+    clear_cache=None,
+    batch_executor=None,
+    workflow_id: str | None = None,
+    attempt_id: str | None = None,
+    runtime_key=None,
 ) -> dict[int, object]:
-    non_empty_inputs = [
-        (segment_index, audio_chunk)
-        for segment_index, _segment, audio_chunk in batch_inputs
-        if len(audio_chunk) > 0
-    ]
+    failure_map = failures if failures is not None else {}
+    result_map: dict[int, object] = {}
+    non_empty_inputs: list[tuple[int, object]] = []
+    for segment_index, _segment, audio_chunk in batch_inputs:
+        if _audio_chunk_is_empty(audio_chunk):
+            failure_map[segment_index] = ValueError("ASR input audio is empty")
+            result_map[segment_index] = None
+        else:
+            non_empty_inputs.append((segment_index, audio_chunk))
+
     if not non_empty_inputs:
-        return {}
+        return result_map
 
-    if len(non_empty_inputs) == 1:
-        segment_index, audio_chunk = non_empty_inputs[0]
-        result = model.transcribe(
-            audio=[(audio_chunk, sample_rate)],
-            context=[context],
-            language=[language] if language is not None else [None],
-            return_time_stamps=False,
-        )
-        return {segment_index: result[0] if result else None}
-
-    try:
+    if batch_executor is not None:
+        if not workflow_id or not attempt_id:
+            raise ValueError("GPU batch execution requires workflow_id and attempt_id")
+        segment_by_index = {index: segment for index, segment, _audio in batch_inputs}
+        items = [
+            AsrBatchItem(
+                identity=BatchItemIdentity(
+                    workflow_id=workflow_id,
+                    attempt_id=attempt_id,
+                    segment_id=segment_by_index[segment_index].segment_id,
+                    ordinal=max(0, int(segment_index) - 1),
+                ),
+                audio=audio_chunk,
+                sample_rate=sample_rate,
+                context=context,
+                language=language,
+                duration_ms=max(0, int(round(len(audio_chunk) * 1000 / sample_rate))),
+                runtime_key=runtime_key,
+            )
+            for segment_index, audio_chunk in non_empty_inputs
+        ]
         LOGGER.debug(
-            "transcribing ASR batch | job_id=%s | batch_size=%s",
-            job_id,
-            len(non_empty_inputs),
+            "submitting ASR batch to shared GPU dispatcher | job_id=%s | attempt_id=%s | batch_size=%s",
+            workflow_id,
+            attempt_id,
+            len(items),
         )
-        result = model.transcribe(
-            audio=[(audio_chunk, sample_rate) for _index, audio_chunk in non_empty_inputs],
-            context=[context for _index, _audio_chunk in non_empty_inputs],
+        try:
+            futures = batch_executor.submit_attempt(items)
+            for item, future in zip(items, futures):
+                outcome = future.result()
+                if not isinstance(outcome, Outcome):
+                    failure_map[item.identity.ordinal + 1] = RuntimeError(
+                        "GPU dispatcher returned an invalid outcome"
+                    )
+                    result_map[item.identity.ordinal + 1] = None
+                    continue
+                segment_index = item.identity.ordinal + 1
+                if outcome.cancelled or isinstance(outcome.error, BatchCancelledError):
+                    raise BatchAttemptCancelled(
+                        f"ASR attempt cancelled: {item.identity.attempt_id}"
+                    )
+                if outcome.error is not None:
+                    if outcome.discarded:
+                        raise BatchOutcomeFatalError(
+                            f"ASR dispatcher discarded item fatally: {outcome.error}"
+                        ) from outcome.error
+                    failure_map[segment_index] = detach_exception(outcome.error)
+                    result_map[segment_index] = None
+                elif outcome.discarded:
+                    raise BatchOutcomeFatalError(
+                        "ASR dispatcher discarded item without a cancellation reason"
+                    )
+                else:
+                    result_map[segment_index] = outcome.result
+            return result_map
+        finally:
+            # The dispatcher owns model lifetime.  This path only releases
+            # references held by this task's request list.
+            items.clear()
+
+    LOGGER.debug(
+        "transcribing ASR batch | job_id=%s | batch_size=%s",
+        job_id,
+        len(non_empty_inputs),
+    )
+
+    def invoke(items: list[tuple[int, object]]):
+        return model.transcribe(
+            audio=[(audio_chunk, sample_rate) for _index, audio_chunk in items],
+            context=[context for _index, _audio_chunk in items],
             language=[
                 language if language is not None else None
-                for _index, _audio_chunk in non_empty_inputs
+                for _index, _audio_chunk in items
             ],
             return_time_stamps=False,
         )
-        return {
-            segment_index: transcription
-            for (segment_index, _audio_chunk), transcription in zip(non_empty_inputs, result)
-        }
-    except Exception:
-        LOGGER.exception(
-            "ASR batch transcription failed; falling back to single-segment inference | job_id=%s | batch_size=%s",
-            job_id,
-            len(non_empty_inputs),
+
+    result_map.update(
+        transcribe_with_isolation(
+            model=model,
+            inputs=non_empty_inputs,
+            invoke=invoke,
+            job_id=job_id,
+            clear_cache=clear_cache,
+            failures=failure_map,
         )
-        fallback_results: dict[int, object] = {}
-        for segment_index, audio_chunk in non_empty_inputs:
-            result = model.transcribe(
-                audio=[(audio_chunk, sample_rate)],
-                context=[context],
-                language=[language] if language is not None else [None],
-                return_time_stamps=False,
-            )
-            fallback_results[segment_index] = result[0] if result else None
-        return fallback_results
+    )
+    return result_map
+
+
+def _audio_chunk_is_empty(audio_chunk: object) -> bool:
+    if audio_chunk is None:
+        return True
+    try:
+        return len(audio_chunk) <= 0  # type: ignore[arg-type]
+    except (TypeError, AttributeError):
+        return False
+
+
+def _asr_warning_code(audio_chunk: object, failure_reason: BaseException) -> str:
+    if _audio_chunk_is_empty(audio_chunk):
+        return "ASR_EMPTY_AUDIO"
+    if isinstance(failure_reason, BatchResultCountError):
+        return "ASR_RESULT_COUNT_MISMATCH"
+    if isinstance(failure_reason, NullTranscriptionError):
+        return "ASR_NULL_RESULT"
+    return "ASR_SEGMENT_FAILED"
+
+
+def _runtime_key_for(manager: ModelManager, batch_executor):
+    """Build and validate the identity attached to every GPU batch item."""
+
+    if batch_executor is None:
+        return None
+    dispatcher_key = getattr(batch_executor, "runtime_key", None)
+    manager_key_factory = getattr(manager, "local_asr_runtime_key", None)
+    candidate_key = manager_key_factory() if callable(manager_key_factory) else None
+    manager_key = candidate_key if isinstance(candidate_key, RuntimeKey) else None
+    if dispatcher_key is not None and manager_key is not None and dispatcher_key != manager_key:
+        raise RuntimeKeyMismatchError(
+            f"RUNTIME_KEY_MISMATCH: workflow runtime {manager_key!r} does not match shared GPU runtime {dispatcher_key!r}"
+        )
+    return manager_key or dispatcher_key
 
 
 def transcribe_cloud_audio_batch(
