@@ -16,4 +16,16 @@ describe('Electron packaging configuration', () => {
     expect(existsSync(resolve(projectDir, electronDist, 'electron.exe'))).toBe(true);
     expect(distributionVersion).toBe(installedElectron.version);
   });
+
+  it('builds into staging and validates bundled ffmpeg before activation', () => {
+    const fastPackageScript = readFileSync(resolve(projectDir, '../../scripts/dev/package_electron_fast.ps1'), 'utf-8');
+    const runtimeBuildScript = readFileSync(resolve(projectDir, '../../scripts/build/build_python_runtime.ps1'), 'utf-8');
+
+    expect(fastPackageScript).toContain('release-electron-staging');
+    expect(fastPackageScript).toContain('Assert-PackagedRuntime $stagedAppDir');
+    expect(fastPackageScript).toContain('Assert-TargetAppStopped');
+    expect(fastPackageScript.indexOf('Assert-PackagedRuntime $stagedAppDir'))
+      .toBeLessThan(fastPackageScript.indexOf('Move-Item -LiteralPath $stagedAppDir'));
+    expect(runtimeBuildScript).toContain('imageio_ffmpeg.get_ffmpeg_exe()');
+  });
 });
