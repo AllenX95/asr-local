@@ -106,10 +106,35 @@ class WorkflowSupervisor:
     async def start(self) -> None:
         if self._started:
             return
-        self._started = True
         self._stopping = False
-        await self.recover_on_startup()
-        self._workers = [asyncio.create_task(self._worker_loop(), name=f"workflow-worker-{index}") for index in range(self.max_inflight)]
+        workers: list[asyncio.Task[None]] = []
+        try:
+            await self.recover_on_startup()
+            workers = [
+                asyncio.create_task(
+                    self._worker_loop(),
+                    name=f"workflow-worker-{index}",
+                )
+                for index in range(self.max_inflight)
+            ]
+        except Exception:
+            for worker in workers:
+                worker.cancel()
+            if workers:
+                await asyncio.gather(*workers, return_exceptions=True)
+            while True:
+                try:
+                    self._queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                else:
+                    self._queue.task_done()
+            self._enqueued_workflows.clear()
+            self._workers = []
+            self._started = False
+            raise
+        self._workers = workers
+        self._started = True
 
     async def shutdown(self, *, interrupt: bool = True) -> None:
         if interrupt:
@@ -254,20 +279,17 @@ class WorkflowSupervisor:
         existing = self.registry.operation_result(operation_id, "workflow.clear", digest)
         if existing is not None:
             return {**existing, "deduplicated": True}
-        snapshot = self.registry.get_snapshot(params["workflow_id"])
-        if snapshot["status"] not in {"completed", "completed_with_warnings", "failed", "cancelled", "interrupted"}:
-            raise ValueError("WORKFLOW_NOT_TERMINAL")
-        result = {"cleared": True, "workflow_id": params["workflow_id"]}
-        self.registry.save_operation_result(
-            operation_id=operation_id,
-            method="workflow.clear",
-            payload_digest=digest,
-            result=result,
-            now=self.clock(),
-        )
-        self.registry.delete_workflow(params["workflow_id"])
-        self._control_events.pop(params["workflow_id"], None)
-        return result
+        async with self._mutation_lock(params["workflow_id"]):
+            result, deduplicated = self.registry.clear_workflow_with_operation(
+                workflow_id=params["workflow_id"],
+                operation_id=operation_id,
+                method="workflow.clear",
+                payload_digest=digest,
+                now=self.clock(),
+            )
+        if not deduplicated:
+            self._control_events.pop(params["workflow_id"], None)
+        return {**result, "deduplicated": True} if deduplicated else result
 
     async def control(self, params: dict[str, Any], *, operation_id: str) -> dict[str, Any]:
         await self.start()
@@ -281,9 +303,18 @@ class WorkflowSupervisor:
                 raise ValueError("STALE_ATTEMPT")
             next_snapshot = _apply_control(snapshot, params["action"], self.clock())
             event = self._event(next_snapshot, params["action"], operation_id=operation_id)
-            self.registry.save_snapshot(next_snapshot, event)
-        result = {"accepted": True, "snapshot": next_snapshot}
-        self.registry.save_operation_result(operation_id=operation_id, method="workflow.control", payload_digest=digest, result=result, now=self.clock())
+            result = {"accepted": True, "snapshot": next_snapshot}
+            result, deduplicated = self.registry.save_snapshot_with_operation(
+                snapshot=next_snapshot,
+                event=event,
+                operation_id=operation_id,
+                method="workflow.control",
+                payload_digest=digest,
+                result=result,
+                now=self.clock(),
+            )
+        if deduplicated:
+            return {**result, "deduplicated": True}
         control_event = self._control_events.setdefault(params["workflow_id"], asyncio.Event())
         if params["action"] == "pause":
             control_event.clear()
@@ -304,20 +335,39 @@ class WorkflowSupervisor:
         existing = self.registry.operation_result(operation_id, "workflow.retry", digest)
         if existing is not None:
             return {**existing, "deduplicated": True}
-        current = self.registry.get_snapshot(params["workflow_id"])
-        decision = retry_snapshot(
-            current,
-            expected_attempt_id=params["expected_attempt_id"],
-            expected_sequence=params["expected_sequence"],
-            from_stage=params["from_stage"],
-            input_artifact_id=params.get("input_artifact_id"),
-            new_attempt_id=self.id_factory("att"),
-            updated_at=self.clock(),
-        )
-        event = self._event(decision.snapshot, "retry_started", operation_id=operation_id, data={"from_stage": decision.from_stage})
-        self.registry.save_snapshot(decision.snapshot, event)
-        result = {"accepted": True, "snapshot": decision.snapshot, "from_stage": decision.from_stage}
-        self.registry.save_operation_result(operation_id=operation_id, method="workflow.retry", payload_digest=digest, result=result, now=self.clock())
+        async with self._mutation_lock(params["workflow_id"]):
+            current = self.registry.get_snapshot(params["workflow_id"])
+            decision = retry_snapshot(
+                current,
+                expected_attempt_id=params["expected_attempt_id"],
+                expected_sequence=params["expected_sequence"],
+                from_stage=params["from_stage"],
+                input_artifact_id=params.get("input_artifact_id"),
+                new_attempt_id=self.id_factory("att"),
+                updated_at=self.clock(),
+            )
+            event = self._event(
+                decision.snapshot,
+                "retry_started",
+                operation_id=operation_id,
+                data={"from_stage": decision.from_stage},
+            )
+            result = {
+                "accepted": True,
+                "snapshot": decision.snapshot,
+                "from_stage": decision.from_stage,
+            }
+            result, deduplicated = self.registry.save_snapshot_with_operation(
+                snapshot=decision.snapshot,
+                event=event,
+                operation_id=operation_id,
+                method="workflow.retry",
+                payload_digest=digest,
+                result=result,
+                now=self.clock(),
+            )
+        if deduplicated:
+            return {**result, "deduplicated": True}
         await self._publish(event)
         control_event = self._control_events.setdefault(decision.snapshot["workflow_id"], asyncio.Event())
         control_event.set()
@@ -330,52 +380,77 @@ class WorkflowSupervisor:
         existing = self.registry.operation_result(operation_id, "artifact.register_revision", digest)
         if existing is not None:
             return {**existing, "deduplicated": True}
-        current = self.registry.get_snapshot(params["workflow_id"])
-        if current["attempt"]["attempt_id"] != params["expected_attempt_id"]:
-            raise ValueError("STALE_ATTEMPT")
-        if current["sequence"] != params["expected_sequence"]:
-            raise ValueError("SEQUENCE_CONFLICT")
-        source = next((item for item in current.get("artifacts", []) if item.get("artifact_id") == params["source_artifact_id"]), None)
-        if source is None or source.get("kind") != params["kind"]:
-            raise ValueError("INVALID_REQUEST")
-        next_revision = max(
-            (int(item.get("revision", 0)) for item in current.get("artifacts", []) if item.get("kind") == params["kind"]),
-            default=0,
-        ) + 1
-        promoted_path = _validate_and_promote_staged_artifact(
-            current,
-            staged_path=params["staged_path"],
-            expected_size=params["size_bytes"],
-            expected_sha256=params["sha256"],
-            kind=params["kind"],
-            revision=next_revision,
-        )
-        revised = json.loads(json.dumps(current))
-        now = self.clock()
-        artifact = {
-            "artifact_id": self.id_factory("artifact"),
-            "kind": params["kind"],
-            "revision": next_revision,
-            "origin": "user_edited",
-            "derived_from_artifact_id": source["artifact_id"],
-            "input_artifact_ids": list(source.get("input_artifact_ids", [])),
-            "stale": False,
-            "path": str(promoted_path),
-            "size_bytes": params["size_bytes"],
-            "sha256": params["sha256"],
-            "created_at": now,
-        }
-        if params["kind"] == "transcript_markdown":
-            for existing_artifact in revised["artifacts"]:
-                if existing_artifact.get("kind") in {"summary_checkpoint_json", "final_summary_markdown", "final_summary_json"} and source["artifact_id"] in existing_artifact.get("input_artifact_ids", []):
-                    existing_artifact["stale"] = True
-        revised["artifacts"].append(artifact)
-        revised["sequence"] += 1
-        revised["timestamps"]["updated_at"] = now
-        event = self._event(revised, "artifact_ready", data={"origin": "user_edited", "derived_from_artifact_id": source["artifact_id"]}, operation_id=operation_id)
-        self.registry.save_snapshot(revised, event)
-        result = {"artifact": artifact, "snapshot": revised}
-        self.registry.save_operation_result(operation_id=operation_id, method="artifact.register_revision", payload_digest=digest, result=result, now=now)
+        async with self._mutation_lock(params["workflow_id"]):
+            existing = self.registry.operation_result(
+                operation_id,
+                "artifact.register_revision",
+                digest,
+            )
+            if existing is not None:
+                return {**existing, "deduplicated": True}
+            current = self.registry.get_snapshot(params["workflow_id"])
+            if current["attempt"]["attempt_id"] != params["expected_attempt_id"]:
+                raise ValueError("STALE_ATTEMPT")
+            if current["sequence"] != params["expected_sequence"]:
+                raise ValueError("SEQUENCE_CONFLICT")
+            source = next((item for item in current.get("artifacts", []) if item.get("artifact_id") == params["source_artifact_id"]), None)
+            if source is None or source.get("kind") != params["kind"]:
+                raise ValueError("INVALID_REQUEST")
+            next_revision = max(
+                (int(item.get("revision", 0)) for item in current.get("artifacts", []) if item.get("kind") == params["kind"]),
+                default=0,
+            ) + 1
+            promoted_path = _validate_and_promote_staged_artifact(
+                current,
+                staged_path=params["staged_path"],
+                expected_size=params["size_bytes"],
+                expected_sha256=params["sha256"],
+                kind=params["kind"],
+                revision=next_revision,
+            )
+            revised = json.loads(json.dumps(current))
+            now = self.clock()
+            artifact = {
+                "artifact_id": self.id_factory("artifact"),
+                "kind": params["kind"],
+                "revision": next_revision,
+                "origin": "user_edited",
+                "derived_from_artifact_id": source["artifact_id"],
+                "input_artifact_ids": list(source.get("input_artifact_ids", [])),
+                "stale": False,
+                "path": str(promoted_path),
+                "size_bytes": params["size_bytes"],
+                "sha256": params["sha256"],
+                "created_at": now,
+            }
+            if params["kind"] == "transcript_markdown":
+                for existing_artifact in revised["artifacts"]:
+                    if existing_artifact.get("kind") in {"summary_checkpoint_json", "final_summary_markdown", "final_summary_json"} and source["artifact_id"] in existing_artifact.get("input_artifact_ids", []):
+                        existing_artifact["stale"] = True
+            revised["artifacts"].append(artifact)
+            revised["sequence"] += 1
+            revised["timestamps"]["updated_at"] = now
+            event = self._event(
+                revised,
+                "artifact_ready",
+                data={
+                    "origin": "user_edited",
+                    "derived_from_artifact_id": source["artifact_id"],
+                },
+                operation_id=operation_id,
+            )
+            result = {"artifact": artifact, "snapshot": revised}
+            result, deduplicated = self.registry.save_snapshot_with_operation(
+                snapshot=revised,
+                event=event,
+                operation_id=operation_id,
+                method="artifact.register_revision",
+                payload_digest=digest,
+                result=result,
+                now=now,
+            )
+        if deduplicated:
+            return {**result, "deduplicated": True}
         await self._publish(event)
         return result
 

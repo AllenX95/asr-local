@@ -14,7 +14,7 @@ const TOML = (existsSync(vendorTomlPath) ? require(vendorTomlPath) : require('@i
 type JsonObject = Record<string, any>
 const DEFAULT_SUMMARY_MAX_INPUT_TOKENS = 8000
 const DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS = 2000
-const SUMMARY_TEMPLATE_CATALOG_VERSION = 11
+const SUMMARY_TEMPLATE_CATALOG_VERSION = 16
 const SUMMARY_POLICY_SNAPSHOT = Object.freeze({ id: 'asr-primary-reference-advisory', version: 1 })
 export const MAX_REFERENCE_DOCUMENT_BYTES = 256 * 1024
 

@@ -1,10 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://asr-local.invalid/contracts/workflow-v2/summary-draft.schema.json",
-  "title": "SummaryDraft",
+  "title": "TrustedSummaryDraft",
+  "description": "Summary recipe after the trusted desktop host has resolved profile, credential binding, template, and policy snapshots.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["profile_id", "profile_version", "base_url", "auth_mode", "model", "model_source", "credential_ref", "provider_binding_sha256", "template", "context_strategy", "input_token_budget", "max_output_tokens"],
+  "required": ["profile_id", "profile_version", "base_url", "auth_mode", "model", "model_source", "credential_ref", "provider_binding_sha256", "template", "context_strategy", "input_token_budget", "max_output_tokens", "policy_snapshot"],
   "properties": {
     "profile_id": { "type": "string", "minLength": 1 },
     "profile_version": { "type": "integer", "minimum": 1 },
@@ -28,6 +29,15 @@
     "context_strategy": { "enum": ["auto", "single_pass", "hierarchical"] },
     "input_token_budget": { "type": "integer", "minimum": 1 },
     "max_output_tokens": { "type": "integer", "minimum": 1 },
+    "policy_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": { "const": "asr-primary-reference-advisory" },
+        "version": { "const": 1 }
+      }
+    },
     "reference_document": {
       "type": ["object", "null"],
       "additionalProperties": false,

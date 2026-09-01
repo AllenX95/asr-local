@@ -498,7 +498,7 @@ npm run electron:package
 
 - `apps/worker-python/README.md`
 - `docs/worker-contract-v2.md`
-- `docs/Phase0_Baseline.md`（标记已被新架构取代或更新当前状态）
+- `docs/legacy/Phase0_Baseline.md`（已归档并标记为被新架构取代）
 - Electron 构建/发布文档中所有双 runtime 描述。
 
 为以下历史规格/benchmark 顶部增加 superseded note，链接到已批准设计：

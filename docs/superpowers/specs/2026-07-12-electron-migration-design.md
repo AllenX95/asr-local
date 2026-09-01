@@ -15,7 +15,7 @@
 4. 在每个迁移阶段保留可验证的回滚点；
 5. 最终删除 Tauri、Rust 和 Cargo 运行路径。
 
-本设计基于 `ASR_Local_无Rust架构重构_PRD.md`、当前 Workflow Contract v2、Python supervisor、Vue stores、Tauri commands 和 Rust worker clients 的现状审计。
+本设计基于 [`ASR_Local_无Rust架构重构_PRD.md`](../../legacy/ASR_Local_无Rust架构重构_PRD.md)、当前 Workflow Contract v2、Python supervisor、Vue stores、Tauri commands 和 Rust worker clients 的现状审计。
 
 ## 2. 现状结论
 

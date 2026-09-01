@@ -1,6 +1,6 @@
-# Phase 0 基线与风险验证记录（已过时）
+# Phase 0 基线与风险验证记录（历史归档）
 
-> Superseded by `docs/superpowers/specs/2026-07-12-qwen-only-single-runtime-design.md`.
+> Superseded by [`2026-07-12-qwen-only-single-runtime-design.md`](../superpowers/specs/2026-07-12-qwen-only-single-runtime-design.md).
 > This historical record describes the removed MOSS dual-runtime experiment and
 > is not the current release architecture.
 

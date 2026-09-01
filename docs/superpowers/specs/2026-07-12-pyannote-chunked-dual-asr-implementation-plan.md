@@ -488,7 +488,7 @@ MOSS 未通过时保持实验性或隐藏，但不得阻止 Qwen 默认链路发
   - 更新热调试和模型 readiness。
 - `docs/worker-contract-v2.md`
   - 更新 profile、snapshot、阶段、warning 终态和错误 details。
-- `docs/Workflow_Runtime_V2_Implementation_Plan.md`
+- `docs/legacy/Workflow_Runtime_V2_Implementation_Plan.md`
   - 标注旧“MOSS 整段且不走 30 秒切片”决策已被本 PRD 取代。
 - `CONTEXT.md`
   - 更新领域语言，删除“避免 MOSS + pyannote”的旧约束，明确 speaker 权威来源为 Pyannote。

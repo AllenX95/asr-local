@@ -7,13 +7,19 @@ import json
 import logging
 import sys
 import time
+from datetime import datetime
 from typing import Any
 
 from app.ipc.v2 import ProtocolError, decode_request, encode_event, encode_response
 from app.config import project_root, state_dir
 from app.workflow.registry import WorkflowRegistry
 from app.workflow.supervisor import WorkflowSupervisor
-from app.workflow.secrets import CredentialError, EphemeralSecretBroker, SecretRequest
+from app.workflow.secrets import (
+    CredentialError,
+    CredentialTimeoutError,
+    EphemeralSecretBroker,
+    SecretRequest,
+)
 
 
 LOGGER = logging.getLogger("asr_local.worker.runtime")
@@ -22,8 +28,8 @@ LOGGER = logging.getLogger("asr_local.worker.runtime")
 class BrokerSecretProvider:
     """Bridges a just-in-time secret request to the desktop over contract v2."""
 
-    def __init__(self) -> None:
-        self.broker = EphemeralSecretBroker()
+    def __init__(self, *, broker: EphemeralSecretBroker | None = None) -> None:
+        self.broker = broker or EphemeralSecretBroker()
         self.on_request = None
         self.on_granted = None
         self._pending: dict[str, asyncio.Future[str]] = {}
@@ -37,7 +43,15 @@ class BrokerSecretProvider:
         if self.on_request is not None:
             await self.on_request({**request.as_event_data(), "workflow_id": request.workflow_id, "attempt_id": request.attempt_id})
         try:
-            return await future
+            expires_at = datetime.fromisoformat(request.expires_at.replace("Z", "+00:00"))
+            timeout_seconds = max(
+                0.0,
+                expires_at.timestamp() - self.broker.clock().timestamp(),
+            )
+            try:
+                return await asyncio.wait_for(future, timeout=timeout_seconds)
+            except TimeoutError as exc:
+                raise CredentialTimeoutError("secret request expired before a grant was provided") from exc
         finally:
             self._pending.pop(request.secret_request_id, None)
             self._pending_attempts.pop(request.secret_request_id, None)
@@ -76,6 +90,30 @@ class BrokerSecretProvider:
             future.set_result(secret)
         if self.on_granted is not None:
             await self.on_granted(params["workflow_id"], params["expected_attempt_id"])
+        return {"accepted": True, "secret_request_id": params["secret_request_id"]}
+
+    async def reject(self, params: dict[str, Any]) -> dict[str, Any]:
+        if params.get("lease_scope") != "attempt":
+            raise ValueError("CREDENTIAL_REJECTED: unsupported lease scope")
+        future = self._pending.get(params["secret_request_id"])
+        if future is None:
+            raise ValueError("CREDENTIAL_REJECTED: secret request is not pending")
+        self.broker.reject(
+            secret_request_id=params["secret_request_id"],
+            workflow_id=params["workflow_id"],
+            attempt_id=params["expected_attempt_id"],
+            profile_id=params["profile_id"],
+            profile_version=params["profile_version"],
+            credential_ref=params["credential_ref"],
+            purpose=params["purpose"],
+            provider_binding_sha256=params["provider_binding_sha256"],
+        )
+        if not future.done():
+            future.set_exception(
+                CredentialError(
+                    f"{params['code']}: {params['message']}"
+                )
+            )
         return {"accepted": True, "secret_request_id": params["secret_request_id"]}
 
 
@@ -298,12 +336,12 @@ class V2StdioServer:
             if not self.handshaken:
                 if message["method"] != "runtime.hello":
                     raise ProtocolError("HANDSHAKE_REQUIRED", "runtime.hello must be the first request.", [], {})
-                self.handshaken = True
                 # Reconcile persisted active workflows before acknowledging the
                 # runtime.  Electron subscribes before hello/list, so the
                 # resulting interrupted events cannot be missed and a process
                 # crash never leaves stale `running` state in the UI.
                 await self.supervisor.start()
+                self.handshaken = True
                 await self._respond(
                     request_id,
                     ok=True,
@@ -378,6 +416,8 @@ class V2StdioServer:
             return await self.supervisor.register_revision(params, operation_id=message["operation_id"])
         if method == "secret.provide":
             return await self.secret_provider.grant(params)
+        if method == "secret.reject":
+            return await self.secret_provider.reject(params)
         if method == "runtime.shutdown":
             active_workflow_ids = [item["workflow_id"] for item in self.supervisor.registry.active_snapshots()]
             await self.supervisor.shutdown(interrupt=params.get("mode") == "interrupt")
@@ -423,6 +463,7 @@ def capabilities(*, requested_pipeline_mode: str = "auto", resolved_pipeline_mod
             "workflow.retry",
             "artifact.register_revision",
             "secret.provide",
+            "secret.reject",
             "runtime.shutdown",
         ],
         "pipeline_profiles": ["pyannote_qwen3_asr", "cloud_asr"],
@@ -521,8 +562,11 @@ def _prompt_preview(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _error_code(error: Exception) -> str:
+    explicit_code = getattr(error, "code", None)
+    if isinstance(explicit_code, str) and explicit_code:
+        return explicit_code
     message = str(error)
-    for code in ("STALE_ATTEMPT", "SEQUENCE_CONFLICT", "INVALID_TRANSITION", "CONTROL_NOT_SUPPORTED", "WORKFLOW_NOT_TERMINAL", "NOT_FOUND", "CREDENTIAL_REJECTED", "CREDENTIAL_REQUIRED", "SOURCE_NOT_FOUND", "SOURCE_UNREADABLE", "SOURCE_CHANGED", "OUTPUT_CONFLICT", "SUMMARY_INPUT_TOO_LARGE", "SUMMARY_RESULT_UNKNOWN", "MODEL_SNAPSHOT_MISMATCH", "RUNTIME_KEY_MISMATCH", "CLOUD_PROFILE_REQUIRED", "UNSUPPORTED_PIPELINE_PROFILE"):
+    for code in ("STALE_ATTEMPT", "SEQUENCE_CONFLICT", "INVALID_TRANSITION", "CONTROL_NOT_SUPPORTED", "WORKFLOW_NOT_TERMINAL", "NOT_FOUND", "CREDENTIAL_REJECTED", "CREDENTIAL_TIMEOUT", "CREDENTIAL_REQUIRED", "SOURCE_NOT_FOUND", "SOURCE_UNREADABLE", "SOURCE_CHANGED", "OUTPUT_CONFLICT", "SUMMARY_INPUT_TOO_LARGE", "SUMMARY_RESULT_UNKNOWN", "MODEL_SNAPSHOT_MISMATCH", "RUNTIME_KEY_MISMATCH", "CLOUD_PROFILE_REQUIRED", "UNSUPPORTED_PIPELINE_PROFILE"):
         if code in message:
             return code
     return "INTERNAL"

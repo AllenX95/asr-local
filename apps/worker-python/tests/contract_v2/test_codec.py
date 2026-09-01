@@ -5,11 +5,12 @@ import hashlib
 from pathlib import Path
 import unittest
 
-from app.ipc.v2 import ProtocolError, decode_request, encode_response
+from app.ipc.v2 import ProtocolError, decode_request, encode_event, encode_response
 
 
 ROOT = Path(__file__).resolve().parents[4]
 FIXTURES = ROOT / "contracts" / "workflow-v2" / "fixtures"
+SCHEMAS = ROOT / "contracts" / "workflow-v2" / "schemas"
 
 
 class ContractV2CodecTests(unittest.TestCase):
@@ -28,6 +29,24 @@ class ContractV2CodecTests(unittest.TestCase):
             with self.subTest(path=path.name):
                 decoded = decode_request(path.read_bytes())
                 self.assertEqual(decoded["protocol_version"], 2)
+
+    def test_completed_with_warnings_event_encodes(self) -> None:
+        fixture = json.loads(
+            (FIXTURES / "workflow-completed-with-warnings.event.json").read_text(encoding="utf-8")
+        )
+        encoded = encode_event(fixture["payload"])
+        decoded = json.loads(encoded.decode("utf-8"))
+        self.assertEqual(decoded["payload"]["state"]["status"], "completed_with_warnings")
+        self.assertEqual(decoded["payload"]["type"], "completed_with_warnings")
+
+    def test_trusted_summary_schema_requires_policy_snapshot(self) -> None:
+        schema = json.loads((SCHEMAS / "summary-draft.schema.json").read_text(encoding="utf-8"))
+        self.assertEqual(schema["title"], "TrustedSummaryDraft")
+        self.assertIn("policy_snapshot", schema["required"])
+        policy = schema["properties"]["policy_snapshot"]
+        self.assertFalse(policy["additionalProperties"])
+        self.assertEqual(policy["properties"]["id"]["const"], "asr-primary-reference-advisory")
+        self.assertEqual(policy["properties"]["version"]["const"], 1)
 
     def test_submit_normalizes_hotwords_and_preserves_replacement(self) -> None:
         payload = json.loads((FIXTURES / "workflow-submit.request.json").read_text(encoding="utf-8"))

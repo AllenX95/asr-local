@@ -20,9 +20,13 @@ function formatSize(value: number) {
   return `${Math.max(1, Math.round(value / 1024))} KB`;
 }
 
+function historyView(kind: string): 'transcript' | 'summary' {
+  return kind === 'transcript' ? 'transcript' : 'summary';
+}
+
 async function refreshAll(): Promise<void> {
   await store.refreshHistory();
-  if (workflowStore.runtime) await workflowStore.refresh();
+  if (workflowStore.isReady) await workflowStore.refresh();
 }
 </script>
 
@@ -54,7 +58,7 @@ async function refreshAll(): Promise<void> {
           <tr v-for="item in store.history" :key="item.id">
             <td><span class="kind-pill">{{ item.kind }}</span></td>
             <td>
-              <button class="link-button" type="button" @click="store.loadMarkdownPath(item.path)">
+              <button class="link-button" type="button" @click="store.loadMarkdownPath(item.path, true, historyView(item.kind))">
                 <FileText :size="16" />
                 {{ item.title }}
               </button>

@@ -35,6 +35,7 @@ KNOWN_METHODS = {
     "workflow.clear",
     "artifact.register_revision",
     "secret.provide",
+    "secret.reject",
     "runtime.shutdown",
 }
 PURPOSES = {"summary_api", "cloud_asr"}
@@ -44,6 +45,7 @@ STATUSES = {
     "paused",
     "waiting_for_secret",
     "completed",
+    "completed_with_warnings",
     "failed",
     "cancelled",
     "interrupted",
@@ -298,8 +300,8 @@ def validate_envelope(message: dict[str, Any]) -> dict[str, Any]:
             raise _error("params must be an object.", "params")
         if method in PERSISTENT_OPERATION_METHODS and not message.get("operation_id"):
             raise _error("operation_id is required for this method.", "operation_id")
-        if method == "secret.provide" and "operation_id" in message:
-            raise _error("secret.provide must not carry operation_id.", "operation_id")
+        if method in {"secret.provide", "secret.reject"} and "operation_id" in message:
+            raise _error(f"{method} must not carry operation_id.", "operation_id")
         if method == "runtime.shutdown" and "operation_id" in message:
             raise _error("runtime.shutdown must not carry operation_id.", "operation_id")
         if method == "workflow.submit":
@@ -320,6 +322,8 @@ def validate_envelope(message: dict[str, Any]) -> dict[str, Any]:
             _validate_revision_params(message["params"])
         elif method == "secret.provide":
             _validate_secret_params(message["params"])
+        elif method == "secret.reject":
+            _validate_secret_reject_params(message["params"])
     elif kind == "response":
         _require_keys(message, {"request_id", "ok"}, "response")
         _string(message["request_id"], "request_id")
@@ -430,6 +434,46 @@ def _validate_secret_params(params: dict[str, Any]) -> None:
     _string(params["credential_ref"], "secret.provide.params.credential_ref")
     if params["purpose"] not in PURPOSES:
         raise _error("Unsupported secret purpose.", "secret.provide.params.purpose")
+
+
+def _validate_secret_reject_params(params: dict[str, Any]) -> None:
+    allowed = {
+        "workflow_id",
+        "expected_attempt_id",
+        "secret_request_id",
+        "profile_id",
+        "profile_version",
+        "credential_ref",
+        "purpose",
+        "provider_binding_sha256",
+        "code",
+        "message",
+        "lease_scope",
+    }
+    _reject_unknown(params, allowed, "secret.reject.params")
+    _require_keys(params, allowed, "secret.reject.params")
+    for name in (
+        "workflow_id",
+        "expected_attempt_id",
+        "secret_request_id",
+        "profile_id",
+        "credential_ref",
+        "provider_binding_sha256",
+        "code",
+        "message",
+        "lease_scope",
+    ):
+        _string(params[name], f"secret.reject.params.{name}")
+    if not isinstance(params["profile_version"], int) or params["profile_version"] < 1:
+        raise _error("profile_version must be positive.", "secret.reject.params.profile_version")
+    if params["purpose"] not in PURPOSES:
+        raise _error("Unsupported secret purpose.", "secret.reject.params.purpose")
+    if params["code"] != "CREDENTIAL_REJECTED":
+        raise _error("Unsupported credential rejection code.", "secret.reject.params.code")
+    if params["lease_scope"] != "attempt":
+        raise _error("Unsupported secret lease scope.", "secret.reject.params.lease_scope")
+    if len(params["message"]) > 500:
+        raise _error("Credential rejection message is too long.", "secret.reject.params.message")
 
 
 def decode_request(line: bytes | str) -> dict[str, Any]:

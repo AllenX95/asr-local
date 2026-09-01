@@ -1,5 +1,7 @@
 # 技术设计文档：本地 ASR 语音转文字桌面应用
 
+> **历史归档（superseded）**：本文描述早期 Rust + Slint 桌面方案，不代表当前 Electron 架构。当前资料入口见 [文档索引](../README.md)。
+
 ## 1. 文档信息
 
 - 文档名称：技术设计文档（Technical Design）

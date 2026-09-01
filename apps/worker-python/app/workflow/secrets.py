@@ -10,6 +10,10 @@ class CredentialError(RuntimeError):
     code = "CREDENTIAL_REJECTED"
 
 
+class CredentialTimeoutError(CredentialError):
+    code = "CREDENTIAL_TIMEOUT"
+
+
 @dataclass(frozen=True, slots=True)
 class SecretRequest:
     secret_request_id: str
@@ -77,23 +81,44 @@ class EphemeralSecretBroker:
         provider_binding_sha256: str,
         secret: str,
     ) -> str:
-        request = self._requests.get(secret_request_id)
-        if request is None or _expired(request.expires_at, self.clock()):
-            raise CredentialError("secret request is missing or expired")
-        expected = (
-            request.workflow_id,
-            request.attempt_id,
-            request.profile_id,
-            request.profile_version,
-            request.credential_ref,
-            request.purpose,
-            request.provider_binding_sha256,
+        self._validate_request(
+            secret_request_id=secret_request_id,
+            workflow_id=workflow_id,
+            attempt_id=attempt_id,
+            profile_id=profile_id,
+            profile_version=profile_version,
+            credential_ref=credential_ref,
+            purpose=purpose,
+            provider_binding_sha256=provider_binding_sha256,
         )
-        actual = (workflow_id, attempt_id, profile_id, profile_version, credential_ref, purpose, provider_binding_sha256)
-        if expected != actual or not secret:
+        if not secret:
             raise CredentialError("secret request identity does not match")
         self._grants[secret_request_id] = secret
         return secret
+
+    def reject(
+        self,
+        *,
+        secret_request_id: str,
+        workflow_id: str,
+        attempt_id: str,
+        profile_id: str,
+        profile_version: int,
+        credential_ref: str,
+        purpose: str,
+        provider_binding_sha256: str,
+    ) -> None:
+        self._validate_request(
+            secret_request_id=secret_request_id,
+            workflow_id=workflow_id,
+            attempt_id=attempt_id,
+            profile_id=profile_id,
+            profile_version=profile_version,
+            credential_ref=credential_ref,
+            purpose=purpose,
+            provider_binding_sha256=provider_binding_sha256,
+        )
+        self.revoke(secret_request_id)
 
     def consume(self, secret_request_id: str) -> str:
         request = self._requests.get(secret_request_id)
@@ -109,6 +134,43 @@ class EphemeralSecretBroker:
     def revoke(self, secret_request_id: str) -> None:
         self._grants.pop(secret_request_id, None)
         self._requests.pop(secret_request_id, None)
+
+    def _validate_request(
+        self,
+        *,
+        secret_request_id: str,
+        workflow_id: str,
+        attempt_id: str,
+        profile_id: str,
+        profile_version: int,
+        credential_ref: str,
+        purpose: str,
+        provider_binding_sha256: str,
+    ) -> SecretRequest:
+        request = self._requests.get(secret_request_id)
+        if request is None or _expired(request.expires_at, self.clock()):
+            raise CredentialError("secret request is missing or expired")
+        expected = (
+            request.workflow_id,
+            request.attempt_id,
+            request.profile_id,
+            request.profile_version,
+            request.credential_ref,
+            request.purpose,
+            request.provider_binding_sha256,
+        )
+        actual = (
+            workflow_id,
+            attempt_id,
+            profile_id,
+            profile_version,
+            credential_ref,
+            purpose,
+            provider_binding_sha256,
+        )
+        if expected != actual:
+            raise CredentialError("secret request identity does not match")
+        return request
 
 
 def _expired(expires_at: str, now: datetime) -> bool:

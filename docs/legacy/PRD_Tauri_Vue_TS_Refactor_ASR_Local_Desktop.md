@@ -1,5 +1,7 @@
 # PRD：本地 ASR 桌面应用 Tauri + Vue + TypeScript 稳定重构
 
+> **历史归档（superseded）**：本文描述的 Tauri/Rust 路线已由 Electron + Vue + Python Workflow Runtime 架构取代。当前资料入口见 [文档索引](../README.md)。
+
 ## 1. 文档信息
 
 - 产品名称：本地 ASR 听记助手

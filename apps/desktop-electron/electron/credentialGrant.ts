@@ -17,6 +17,11 @@ export type SecretProvideParams = {
   lease_scope: 'attempt'
 }
 
+export type SecretRejectParams = Omit<SecretProvideParams, 'secret'> & {
+  code: 'CREDENTIAL_REJECTED'
+  message: string
+}
+
 export function buildSecretProvideParams(event: CredentialsRequiredEvent, secret: string): SecretProvideParams {
   return {
     workflow_id: event.workflow_id,
@@ -29,5 +34,14 @@ export function buildSecretProvideParams(event: CredentialsRequiredEvent, secret
     provider_binding_sha256: String(event.data.provider_binding_sha256),
     secret,
     lease_scope: 'attempt',
+  }
+}
+
+export function buildSecretRejectParams(event: CredentialsRequiredEvent): SecretRejectParams {
+  const { secret: _secret, ...identity } = buildSecretProvideParams(event, 'not-transmitted')
+  return {
+    ...identity,
+    code: 'CREDENTIAL_REJECTED',
+    message: 'The trusted desktop host could not authorize this credential request.',
   }
 }

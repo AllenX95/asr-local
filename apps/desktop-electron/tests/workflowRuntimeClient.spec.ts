@@ -159,4 +159,48 @@ describe('WorkflowRuntimeClient cold start single-flight', () => {
     expect(statuses).not.toContain('unavailable')
     expect(statuses.at(-1)).toBe('stopped')
   })
+
+  it('rolls back a failed hello and allows a clean retry', async () => {
+    const failedChild = makeFakeChild()
+    const retriedChild = makeFakeChild()
+    vi.mocked(spawn).mockReturnValueOnce(failedChild).mockReturnValueOnce(retriedChild)
+    const client = new WorkflowRuntimeClient('E:/asr-local')
+    const statuses: string[] = []
+    client.on('runtime-status', (status: { state: string }) => statuses.push(status.state))
+
+    const failedRequest = client.request('runtime.capabilities', {})
+    await Promise.resolve()
+    const failedHello = messages(failedChild)[0]
+    failedChild.stdout.push(JSON.stringify({
+      kind: 'response',
+      request_id: failedHello.request_id,
+      ok: true,
+      result: { selected_version: 1 },
+    }) + '\n')
+    await expect(failedRequest).rejects.toThrow('did not negotiate protocol version 2')
+    expect(failedChild.kill).toHaveBeenCalledOnce()
+    expect(statuses.at(-1)).toBe('error')
+
+    const retriedRequest = client.request('runtime.capabilities', {})
+    await Promise.resolve()
+    const retriedHello = messages(retriedChild)[0]
+    retriedChild.stdout.push(JSON.stringify({
+      kind: 'response',
+      request_id: retriedHello.request_id,
+      ok: true,
+      result: { selected_version: 2 },
+    }) + '\n')
+    await vi.waitFor(() => expect(messages(retriedChild)).toHaveLength(2))
+    const capabilityRequest = messages(retriedChild)[1]
+    retriedChild.stdout.push(JSON.stringify({
+      kind: 'response',
+      request_id: capabilityRequest.request_id,
+      ok: true,
+      result: { methods: [] },
+    }) + '\n')
+
+    await expect(retriedRequest).resolves.toEqual({ methods: [] })
+    expect(spawn).toHaveBeenCalledTimes(2)
+    expect(statuses.at(-1)).toBe('ready')
+  })
 })

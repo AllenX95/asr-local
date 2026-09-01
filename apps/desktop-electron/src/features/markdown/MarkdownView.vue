@@ -8,6 +8,7 @@ import { api } from '../../ipc/desktopClient';
 import type { WorkflowCatalogs, WorkflowSummaryProfile, WorkflowSummaryTemplate } from '../../ipc/workerTypes';
 import { useAppStore } from '../../stores/appStore';
 import { useWorkflowStore } from '../../stores/workflowStore';
+import { artifactStagingPath, describeUtf8Content } from '../../workflows/artifactRevision';
 import type { WorkflowSnapshot } from '../../workflows/types';
 
 type MarkdownMode = 'transcript' | 'summary';
@@ -31,6 +32,7 @@ const summaryPrivacyConfirmed = ref(false);
 const summaryGenerating = ref(false);
 const summaryError = ref('');
 const summaryOutboundScope = '转录文本和原有参考速记（如有）';
+const artifactSaving = ref(false);
 let previewTimer: number | undefined;
 
 const mode = computed(() => props.mode);
@@ -56,6 +58,18 @@ function latestArtifact(workflow: WorkflowSnapshot, kind: string) {
 }
 
 const selectedArtifact = computed(() => artifactOptions.value.find((option) => option.id === selectedWorkflowId.value) ?? null);
+const managedArtifactBinding = computed(() => {
+  const currentPath = store.markdown.path;
+  if (!currentPath) return null;
+  for (const workflow of workflowStore.workflows) {
+    const artifact = workflow.artifacts.find((item) =>
+      item.path === currentPath
+      && ['transcript_markdown', 'final_summary_markdown'].includes(item.kind)
+    );
+    if (artifact) return { workflow, artifact };
+  }
+  return null;
+});
 const availableProfiles = computed<WorkflowSummaryProfile[]>(() => {
   if (catalogs.value.summary_profiles.length) return catalogs.value.summary_profiles;
   return store.summaryProfiles.profiles.map((profile) => ({
@@ -140,6 +154,47 @@ async function openExternalFile(): Promise<void> {
   await store.openMarkdownFile(mode.value);
   selectedWorkflowId.value = '';
   artifactBindingPath.value = '';
+}
+
+async function saveMarkdown(): Promise<void> {
+  const binding = managedArtifactBinding.value;
+  if (!binding) {
+    await store.saveMarkdown();
+    return;
+  }
+  if (!store.markdownDirty || artifactSaving.value) return;
+  artifactSaving.value = true;
+  try {
+    const content = store.markdown.content;
+    const stagedPath = artifactStagingPath(
+      binding.artifact.path,
+      binding.workflow.workflow_id,
+    );
+    const descriptor = await describeUtf8Content(content);
+    await api.saveTextFile(stagedPath, content);
+    const revised = await workflowStore.registerRevision({
+      workflow_id: binding.workflow.workflow_id,
+      expected_attempt_id: binding.workflow.attempt.attempt_id,
+      expected_sequence: binding.workflow.sequence,
+      source_artifact_id: binding.artifact.artifact_id,
+      kind: binding.artifact.kind as 'transcript_markdown' | 'final_summary_markdown',
+      staged_path: stagedPath,
+      size_bytes: descriptor.size_bytes,
+      sha256: descriptor.sha256,
+    });
+    const revision = latestArtifact(revised, binding.artifact.kind);
+    if (!revision) {
+      throw new Error('Artifact revision was registered without a readable Markdown result.');
+    }
+    selectedWorkflowId.value = revised.workflow_id;
+    artifactBindingPath.value = revision.path;
+    store.setMarkdown(revision.path, content, true);
+    store.setStatus('产物新版本已保存', revision.path);
+  } catch (reason) {
+    store.setError('产物版本保存失败', reason);
+  } finally {
+    artifactSaving.value = false;
+  }
 }
 
 const canGenerateSummary = computed(() => Boolean(
@@ -227,9 +282,9 @@ const renderedHtml = computed(() =>
           <FolderOpen :size="17" />
           打开
         </button>
-        <button class="primary" type="button" @click="store.saveMarkdown">
+        <button class="primary" type="button" :disabled="artifactSaving || !store.markdownDirty" @click="saveMarkdown">
           <Save :size="17" />
-          保存
+          {{ managedArtifactBinding ? (artifactSaving ? '保存版本中' : '保存为新版本') : '保存' }}
         </button>
         <button type="button" :disabled="!store.markdown.path" @click="store.openPath(store.markdown.path)">
           <Download :size="17" />
@@ -288,7 +343,7 @@ const renderedHtml = computed(() =>
     <div class="panel path-panel">
       <label>
         <span>当前文件</span>
-        <input v-model="store.markdown.path" type="text" />
+        <input :value="store.markdown.path" type="text" readonly />
       </label>
       <span class="dirty-badge" :class="{ active: store.markdownDirty }">
         {{ store.markdownDirty ? '未保存' : '已保存' }}
