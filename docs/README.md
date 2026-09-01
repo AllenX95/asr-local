@@ -11,12 +11,14 @@
 - [领域词汇表](../CONTEXT.md)：当前领域对象与术语。
 - [Electron Desktop README](../apps/desktop-electron/README.md)：开发、验证与打包入口。
 - [Python Worker README](../apps/worker-python/README.md)：Runtime 开发与运行说明。
+- [Prompt 评估工具](../scripts/eval/prompt/README.md)：本地总结 Prompt 生成、评分与对比脚本；产物只写入被忽略的 `outputs/`。
 
 ## 设计与验证记录
 
 - [`superpowers/specs/`](./superpowers/specs/)：按日期保存的设计与实施记录；文件中的未来时态和阶段状态以当前代码及上方文档为准。
 - [`benchmarks/`](./benchmarks/)：模型、性能和生产门槛记录。
 - [`research/`](./research/)：专项技术研究。
+- [`legacy/evidence/`](./legacy/evidence/)：已脱敏的历史迁移与运行时验证证据。
 
 ## 历史归档
 

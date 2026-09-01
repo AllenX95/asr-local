@@ -741,6 +741,7 @@ Python：
 - FIX-007：自定义输出根由 Main 持久记录并依据 Workflow Snapshot 重建/裁剪；读写路径先解析真实父目录再校验 root containment，覆盖路径穿越和目录链接逃逸。
 - CLEAN-003：删除本地 Tauri 缓存、旧 staging、空根测试包和损坏的 Rust/Slint 恢复诊断；旧 Tauri/Workflow/MOSS 文档统一移入 `docs/legacy`，并新增 `docs/README.md` 索引。
 - BUILD-CLEAN：Electron Main 编译前清空生成目录并排除 `*.spec.ts`；打包清单只保留一次 `dist-electron/**/*`，避免测试源码和重复 TOML 依赖进入发布包。
+- TMP-CLEAN：清理约 613.7 MiB 的旧 Electron/npm、Runtime 下载缓存和 smoke 现场，仅保留当前调试入口使用的 `tmp/electron-debug`；Prompt 评估脚本迁入 `scripts/eval/prompt`，MOSS smoke 只归档脱敏工程指标。
 
 架构需求推进状态：
 
