@@ -4,7 +4,11 @@ import asyncio
 from datetime import datetime, timezone
 import unittest
 
-from app.workflow.secrets import CredentialError, EphemeralSecretBroker
+from app.workflow.secrets import (
+    CredentialError,
+    CredentialTimeoutError,
+    EphemeralSecretBroker,
+)
 from app.supervisor.server import BrokerSecretProvider
 
 
@@ -82,6 +86,71 @@ class SecretBrokerTests(unittest.TestCase):
             task = asyncio.create_task(provider.provide(workflow_id="wf-1", attempt_id="att-1", profile=profile, purpose="summary_api"))
             await requested.wait()
             self.assertTrue(provider.cancel_attempt("wf-1", "att-1"))
+            with self.assertRaises(CredentialError):
+                await task
+
+        asyncio.run(scenario())
+
+    def test_stdio_bridge_times_out_without_a_grant(self) -> None:
+        async def scenario() -> None:
+            provider = BrokerSecretProvider(
+                broker=EphemeralSecretBroker(ttl_seconds=0)
+            )
+            profile = {
+                "profile_id": "profile-1",
+                "profile_version": 1,
+                "credential_ref": "credential://summary/profile-1",
+                "provider_binding_sha256": "binding",
+                "auth_mode": "bearer",
+            }
+            with self.assertRaises(CredentialTimeoutError):
+                await provider.provide(
+                    workflow_id="wf-1",
+                    attempt_id="att-1",
+                    profile=profile,
+                    purpose="summary_api",
+                )
+            self.assertEqual(provider._pending, {})
+            self.assertEqual(provider._pending_attempts, {})
+
+        asyncio.run(scenario())
+
+    def test_stdio_bridge_accepts_a_bound_rejection_and_wakes_waiter(self) -> None:
+        async def scenario() -> None:
+            provider = BrokerSecretProvider()
+            requested: list[dict] = []
+
+            async def on_request(data: dict) -> None:
+                requested.append(data)
+
+            provider.on_request = on_request
+            profile = {
+                "profile_id": "profile-1",
+                "profile_version": 1,
+                "credential_ref": "credential://summary/profile-1",
+                "provider_binding_sha256": "binding",
+                "auth_mode": "bearer",
+            }
+            task = asyncio.create_task(
+                provider.provide(
+                    workflow_id="wf-1",
+                    attempt_id="att-1",
+                    profile=profile,
+                    purpose="summary_api",
+                )
+            )
+            while not requested:
+                await asyncio.sleep(0)
+            response = await provider.reject(
+                {
+                    **requested[0],
+                    "expected_attempt_id": "att-1",
+                    "code": "CREDENTIAL_REJECTED",
+                    "message": "desktop authorization failed",
+                    "lease_scope": "attempt",
+                }
+            )
+            self.assertTrue(response["accepted"])
             with self.assertRaises(CredentialError):
                 await task
 

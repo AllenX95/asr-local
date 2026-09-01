@@ -1738,7 +1738,7 @@ Q: 创始人甲成宇负责项目。
         config_path = Path(__file__).resolve().parents[4] / "config" / "summary_templates.toml"
         with config_path.open("rb") as handle:
             catalog = tomllib.load(handle)
-        self.assertEqual(catalog["catalog_version"], 11)
+        self.assertEqual(catalog["catalog_version"], 16)
         first_meeting = next(item for item in catalog["templates"] if item["name"] == "首次交流模板")
         self.assertEqual(first_meeting["version"], 10)
         self.assertIn("## 一、公司概览", first_meeting["prompt"])
@@ -1770,9 +1770,9 @@ Q: 创始人甲成宇负责项目。
         config_path = Path(__file__).resolve().parents[4] / "config" / "summary_templates.toml"
         with config_path.open("rb") as handle:
             catalog = tomllib.load(handle)
-        self.assertEqual(catalog["catalog_version"], 11)
+        self.assertEqual(catalog["catalog_version"], 16)
         expected_versions = {
-            "summary-template-team-interview": 8,
+            "summary-template-team-interview": 13,
             "summary-template-customer-interview": 8,
             "summary-template-general": 8,
             "summary-template-first-meeting": 10,
@@ -1786,7 +1786,15 @@ Q: 创始人甲成宇负责项目。
             self.assertIn("仅当冲突可能影响重要判断时简短标注“待核实”", prompt)
             self.assertIn("不强制双写、逐项登记或穷举差异", prompt)
             self.assertIn("不得为了控制篇幅删除可能影响重要判断的", prompt)
-            for mechanical_rule in (
+            mechanical_rules = (
+                "详细 Q&A",
+                "完整 Q&A",
+                "### Q1",
+                "回答状态",
+                "连续编号",
+                "问题数量",
+                "主题索引",
+            ) if template_id == "summary-template-team-interview" else (
                 "详细 Q&A",
                 "完整 Q&A",
                 "### Q1",
@@ -1795,7 +1803,8 @@ Q: 创始人甲成宇负责项目。
                 "连续编号",
                 "问题数量",
                 "主题索引",
-            ):
+            )
+            for mechanical_rule in mechanical_rules:
                 self.assertNotIn(mechanical_rule, prompt, (template_id, mechanical_rule))
             for broad_rule in (
                 "不得为了控制篇幅删除负面信息、矛盾、数字口径或未正面回答之处",
@@ -1803,6 +1812,49 @@ Q: 创始人甲成宇负责项目。
                 "不得为了控制篇幅删除矛盾、数字口径或未正面回答之处",
                 ):
                 self.assertNotIn(broad_rule, prompt)
+
+        team_prompt = by_id["summary-template-team-interview"]["prompt"]
+        self.assertIn("## 二、按主题整理的问答与现场追问", team_prompt)
+        self.assertIn("**Q：{经整理的具体问题}**", team_prompt)
+        self.assertIn("**现场追问：**", team_prompt)
+        self.assertNotIn("**后续建议追问：**", team_prompt)
+        self.assertNotIn("**主题小结：**", team_prompt)
+        self.assertIn("提问者的接话、复述或未完成句，以及受访者主动说出的信息，不反向生成问题", team_prompt)
+        self.assertIn("不生成后续建议追问或主题小结", team_prompt)
+        self.assertIn("现场追问”按上下文中的语义依赖判断", team_prompt)
+        self.assertIn("没有真实现场追问时省略整个“现场追问”小节", team_prompt)
+        self.assertIn("存在可靠时间锚点时，可以在原词后用括号补充绝对年份", team_prompt)
+        self.assertIn("今年（2026年）", team_prompt)
+        self.assertIn("明年（2027年）", team_prompt)
+        self.assertIn("可采用 `generated_at` 或文件名日期作为默认锚点", team_prompt)
+        self.assertIn("主题只是组织相关问题的分类容器，不代表整个主题只能有一个主问题", team_prompt)
+        self.assertIn("每个独立回答目标必须在所属主题下单列一组 Q&A", team_prompt)
+        self.assertIn("不得把多个相距较远的独立问题合成一个 Q", team_prompt)
+        self.assertIn("受访者主动补充", team_prompt)
+        self.assertIn("证据锚点表", team_prompt)
+        self.assertIn("问题意图表", team_prompt)
+        self.assertIn("对象、指标、时间/阶段、决策/目的和因果角度", team_prompt)
+        self.assertIn("先照录、后整理", team_prompt)
+        self.assertIn("可将 `generated_at` 或文件名日期作为默认访谈时间锚点", team_prompt)
+        self.assertIn("百分之十、十几个点", team_prompt)
+        self.assertIn("具体比例待核实", team_prompt)
+        self.assertIn("如果删去上一回答，这个问题是否仍有清楚、独立的回答目标", team_prompt)
+        self.assertIn("若是，则它是新的主 Q&A", team_prompt)
+        self.assertIn("仅有时间相邻、同属大主题或使用“那/所以”等连接词都不足以构成现场追问", team_prompt)
+        self.assertIn("无法确定时优先列为新的主 Q&A", team_prompt)
+        self.assertIn("受访者连续陈述的新信息列为“受访者主动补充”", team_prompt)
+        self.assertIn("最后按主题复核问答层级和事实", team_prompt)
+        self.assertIn("口语范围和限定词须按原意保留", team_prompt)
+        self.assertIn("材料未说明估值是投前还是投后", team_prompt)
+        self.assertIn("不得臆测身份、职务或职责", team_prompt)
+        self.assertIn("本文是访谈后的客观记录", team_prompt)
+        self.assertIn("不要输出“后续建议追问”或“主题小结”", team_prompt)
+        self.assertIn("跨主题待核实事项不重复主题内已经清楚标注的事实", team_prompt)
+        self.assertIn("同一主题通常可以出现多组并列主 Q&A", team_prompt)
+        self.assertIn("#### 问答：{该独立问题的简短描述}", team_prompt)
+        self.assertIn("按实际数量继续重复问答单元", team_prompt)
+        self.assertIn("未来采用订阅还是项目制", team_prompt)
+        self.assertIn("材料只确认“创始人”时不得自动补成“CEO”", team_prompt)
 
         general_prompt = by_id["summary-template-general"]["prompt"]
         self.assertIn("动态识别主题", general_prompt)

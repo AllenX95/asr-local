@@ -15,6 +15,7 @@ export class WorkflowRuntimeClient extends EventEmitter {
   private shuttingDown = false
   private restartTimer: NodeJS.Timeout | null = null
   private restartAttemptedForOutage = false
+  private startupRollbackChildren = new WeakSet<ChildProcessWithoutNullStreams>()
 
   constructor(private readonly projectRoot: string, private readonly options: { stderrSink?: (text: string) => void } = {}) { super() }
 
@@ -94,7 +95,8 @@ export class WorkflowRuntimeClient extends EventEmitter {
       const error = new Error(`Workflow runtime exited (code=${code}, signal=${signal})`)
       for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(error) }
       this.pending.clear()
-      if (this.shuttingDown) return
+      const startupRollback = this.startupRollbackChildren.delete(child)
+      if (this.shuttingDown || startupRollback) return
       this.emit('unavailable', { code, signal })
       this.emit('runtime-status', { state: 'unavailable', occurred_at: new Date().toISOString(), detail: `Python Runtime 意外退出 (code=${code}, signal=${signal})` })
       this.scheduleAutomaticRestart()
@@ -106,15 +108,32 @@ export class WorkflowRuntimeClient extends EventEmitter {
       this.emit('error', error)
       this.emit('runtime-status', { state: 'error', occurred_at: new Date().toISOString(), detail: `Python Runtime 启动失败: ${error.message}` })
     })
-    // Cold production imports can exceed the normal request timeout on Windows.
-    const hello = await this.send('runtime.hello', { supported_versions: [2] }, undefined, 120_000) as { selected_version?: number; capabilities?: { pipeline_mode?: { resolved?: string } } }
-    if (hello.selected_version !== 2) { child.kill(); throw new Error('Workflow runtime did not negotiate protocol version 2') }
-    if (pipelineMode === 'production' && hello.capabilities?.pipeline_mode?.resolved !== 'production') {
+    try {
+      // Cold production imports can exceed the normal request timeout on Windows.
+      const hello = await this.send('runtime.hello', { supported_versions: [2] }, undefined, 120_000) as { selected_version?: number; capabilities?: { pipeline_mode?: { resolved?: string } } }
+      if (hello.selected_version !== 2) throw new Error('Workflow runtime did not negotiate protocol version 2')
+      if (pipelineMode === 'production' && hello.capabilities?.pipeline_mode?.resolved !== 'production') {
+        throw new Error('Production workflow runtime did not resolve production pipeline mode')
+      }
+      this.emit('runtime-status', { state: 'ready', occurred_at: new Date().toISOString(), detail: 'Python Runtime v2 已就绪', pid: child.pid })
+      this.restartAttemptedForOutage = false
+    } catch (error) {
+      const startupError = error instanceof Error ? error : new Error(String(error))
+      this.startupRollbackChildren.add(child)
+      if (this.child === child) this.child = null
       child.kill()
-      throw new Error('Production workflow runtime did not resolve production pipeline mode')
+      for (const pending of this.pending.values()) {
+        clearTimeout(pending.timer)
+        pending.reject(startupError)
+      }
+      this.pending.clear()
+      this.emit('runtime-status', {
+        state: 'error',
+        occurred_at: new Date().toISOString(),
+        detail: 'Python Runtime 启动失败: ' + startupError.message,
+      })
+      throw startupError
     }
-    this.emit('runtime-status', { state: 'ready', occurred_at: new Date().toISOString(), detail: 'Python Runtime v2 已就绪', pid: child.pid })
-    this.restartAttemptedForOutage = false
   }
 
   private scheduleAutomaticRestart(): void {

@@ -121,6 +121,17 @@ class CountingTranscriber:
         return {"kind": "transcript_markdown", "path": "", "text": "stable transcript"}
 
 
+class WarningTranscriber:
+    async def transcribe(self, spec: dict, attempt_id: str) -> dict:
+        del spec, attempt_id
+        return {
+            "kind": "transcript_markdown",
+            "path": "",
+            "text": "transcript with a recoverable warning",
+            "warnings": ["one segment used a fallback"],
+        }
+
+
 class NoCallSummaryGenerator:
     def __init__(self) -> None:
         self.calls = 0
@@ -165,6 +176,41 @@ def make_draft(source: Path, name: str = "sample") -> dict:
 
 
 class SupervisorTests(unittest.TestCase):
+    def test_failed_startup_recovery_can_be_retried_cleanly(self) -> None:
+        async def scenario() -> None:
+            with tempfile.TemporaryDirectory() as temp:
+                registry = WorkflowRegistry(Path(temp) / "registry.sqlite3")
+                supervisor = WorkflowSupervisor(
+                    registry,
+                    transcriber=FakeTranscriber(),
+                    summary_generator=FakeSummaryGenerator(),
+                )
+                calls = 0
+
+                async def recover_once() -> None:
+                    nonlocal calls
+                    calls += 1
+                    if calls == 1:
+                        await supervisor._queue.put(("wf_partial", None))
+                        supervisor._enqueued_workflows.add("wf_partial")
+                        raise RuntimeError("injected recovery failure")
+
+                supervisor.recover_on_startup = recover_once  # type: ignore[method-assign]
+                with self.assertRaisesRegex(RuntimeError, "injected recovery failure"):
+                    await supervisor.start()
+                self.assertFalse(supervisor._started)
+                self.assertEqual(supervisor._workers, [])
+                self.assertTrue(supervisor._queue.empty())
+                self.assertEqual(supervisor._enqueued_workflows, set())
+
+                await supervisor.start()
+                self.assertTrue(supervisor._started)
+                self.assertEqual(calls, 2)
+                await supervisor.shutdown(interrupt=False)
+                registry.close()
+
+        asyncio.run(scenario())
+
     def test_materialized_artifact_metadata_matches_exact_utf8_bytes(self) -> None:
         async def scenario() -> None:
             with tempfile.TemporaryDirectory() as temp:
@@ -867,6 +913,38 @@ class SupervisorTests(unittest.TestCase):
                 with self.assertRaises(KeyError):
                     await supervisor.get(workflow_id)
                 self.assertTrue(all(path.is_file() for path in artifact_paths))
+                await supervisor.shutdown(interrupt=False)
+                registry.close()
+
+        asyncio.run(scenario())
+
+    def test_completed_with_warnings_can_be_cleared(self) -> None:
+        async def scenario() -> None:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                source = root / "source.wav"
+                source.write_bytes(b"audio")
+                draft = make_draft(source, "warning-clearable")
+                draft["output"]["directory"] = str(root / "outputs")
+                registry = WorkflowRegistry(root / "registry.sqlite3")
+                supervisor = WorkflowSupervisor(
+                    registry,
+                    transcriber=WarningTranscriber(),
+                    summary_generator=FakeSummaryGenerator(),
+                )
+                submitted = await supervisor.submit(draft, operation_id="op_submit_warning_clearable")
+                workflow_id = submitted["snapshot"]["workflow_id"]
+                await supervisor._queue.join()
+                completed = await supervisor.get(workflow_id)
+                self.assertEqual(completed["status"], "completed_with_warnings")
+
+                result = await supervisor.clear(
+                    {"workflow_id": workflow_id},
+                    operation_id="op_clear_warning_done",
+                )
+                self.assertTrue(result["cleared"])
+                with self.assertRaises(KeyError):
+                    await supervisor.get(workflow_id)
                 await supervisor.shutdown(interrupt=False)
                 registry.close()
 

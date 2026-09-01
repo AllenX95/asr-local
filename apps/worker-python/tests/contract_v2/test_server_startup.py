@@ -131,6 +131,33 @@ class V2ServerStartupTests(unittest.TestCase):
             finally:
                 server.registry.close()
 
+    def test_failed_supervisor_start_does_not_commit_handshake(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch("app.supervisor.server.project_root", return_value=root), patch(
+                "app.supervisor.server.resolve_pipeline_mode", return_value="fake"
+            ):
+                server = V2StdioServer(pipeline_mode="fake")
+            server.supervisor = SimpleNamespace(
+                start=AsyncMock(side_effect=RuntimeError("recovery failed"))
+            )
+            try:
+                async def exercise_protocol() -> None:
+                    output = io.BytesIO()
+                    with patch("sys.stdout", _BinaryStdout(output)):
+                        await server._handle_line(
+                            b'{"protocol":"asr-local-workflow","protocol_version":2,'
+                            b'"kind":"request","request_id":"req_hello_failed_start",'
+                            b'"method":"runtime.hello","params":{"supported_versions":[2]}}\n'
+                        )
+                    response = json.loads(output.getvalue())
+                    self.assertFalse(response["ok"])
+                    self.assertFalse(server.handshaken)
+
+                asyncio.run(exercise_protocol())
+            finally:
+                server.registry.close()
+
     def test_eof_closes_production_transcriber_even_when_supervisor_never_started(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

@@ -8,7 +8,9 @@ import { WorkflowRuntimeClient } from './workflowRuntimeClient.js'
 import { HostServices, freezeReferenceDocumentRequest } from './hostServices.js'
 import { resolveRuntimePaths } from './runtimePaths.js'
 import { createSessionLogger } from './sessionLogger.js'
-import { buildSecretProvideParams } from './credentialGrant.js'
+import { buildSecretProvideParams, buildSecretRejectParams } from './credentialGrant.js'
+import { loadOutputPathGrants, saveOutputPathGrants, workflowArtifactPaths, workflowOutputRoot } from './outputPathGrants.js'
+import { canonicalizeAccessPath, isPathWithinRoots } from './pathAccess.js'
 
 const appDir = path.dirname(fileURLToPath(import.meta.url))
 const userDataDir = app.getPath('userData')
@@ -26,17 +28,50 @@ logger.info('Electron session starting', { packaged: app.isPackaged, projectRoot
 let mainWindow: BrowserWindow | null = null
 let quitting = false
 const grantedPaths = new Set<string>()
+const selectedOutputRoots = new Set<string>()
+const persistentOutputRoots = new Set<string>()
+const managedArtifactPaths = new Set<string>()
+const outputPathGrantsFile = path.join(userDataDir, 'output-path-grants.json')
 
-function grantPath(target: string): string { const resolved = path.resolve(target); grantedPaths.add(resolved); return resolved }
+function grantPath(target: string): string { const resolved = canonicalizeAccessPath(target); grantedPaths.add(resolved); return resolved }
+function grantOutputRoot(target: string): string {
+  const resolved = canonicalizeAccessPath(target)
+  selectedOutputRoots.add(resolved)
+  return resolved
+}
+async function replaceOutputRootsFromSnapshots(snapshots: unknown[]): Promise<void> {
+  const referencedRoots = snapshots.map(workflowOutputRoot).filter((root): root is string => root !== null)
+  await saveOutputPathGrants(outputPathGrantsFile, referencedRoots)
+  persistentOutputRoots.clear()
+  for (const root of referencedRoots) persistentOutputRoots.add(root)
+  managedArtifactPaths.clear()
+  for (const snapshot of snapshots) {
+    for (const artifactPath of workflowArtifactPaths(snapshot)) managedArtifactPaths.add(artifactPath)
+  }
+}
+async function retainSnapshotPaths(snapshot: unknown): Promise<void> {
+  for (const artifactPath of workflowArtifactPaths(snapshot)) managedArtifactPaths.add(artifactPath)
+  const root = workflowOutputRoot(snapshot)
+  if (!root) return
+  if (!persistentOutputRoots.has(root)) {
+    await saveOutputPathGrants(outputPathGrantsFile, [...persistentOutputRoots, root])
+    persistentOutputRoots.add(root)
+  }
+  selectedOutputRoots.delete(root)
+}
+async function retainWorkflowResult(result: unknown): Promise<unknown> {
+  await retainSnapshotPaths((result as { snapshot?: unknown } | null)?.snapshot)
+  return result
+}
 function assertGrantedPath(target: string): string {
-  const resolved = path.resolve(target)
+  const resolved = canonicalizeAccessPath(target)
   if (!grantedPaths.has(resolved)) throw new Error('REFERENCE_DOCUMENT_FORBIDDEN: file was not selected through the desktop file dialog')
   return resolved
 }
 function assertAllowedPath(target: string): string {
-  const resolved = path.resolve(target)
-  const roots = [projectRoot, app.getPath('userData'), outputsDir, ...(legacyOutputsDir ? [legacyOutputsDir] : []), ...grantedPaths]
-  if (!roots.some((root) => resolved === root || resolved.startsWith(`${root}${path.sep}`))) throw new Error(`Path is outside approved locations: ${resolved}`)
+  const resolved = canonicalizeAccessPath(target)
+  const roots = [projectRoot, userDataDir, outputsDir, ...(legacyOutputsDir ? [legacyOutputsDir] : []), ...persistentOutputRoots, ...selectedOutputRoots, ...grantedPaths]
+  if (!isPathWithinRoots(resolved, roots)) throw new Error(`Path is outside approved locations: ${resolved}`)
   return resolved
 }
 
@@ -66,13 +101,14 @@ async function invoke(command: string, args: Record<string, unknown>): Promise<u
     }
     case 'select_output_dir': {
       const result = await dialog.showOpenDialog(mainWindow!, { properties: ['openDirectory', 'createDirectory'] })
-      return result.canceled || !result.filePaths[0] ? null : grantPath(result.filePaths[0])
+      return result.canceled || !result.filePaths[0] ? null : grantOutputRoot(result.filePaths[0])
     }
     case 'read_text_file': {
       const filePath = assertAllowedPath(requireString(args, 'path')); const info = await stat(filePath); return { path: filePath, content: await readFile(filePath, 'utf8'), size_bytes: info.size, modified_ms: info.mtimeMs }
     }
     case 'save_text_file': {
       const filePath = assertAllowedPath(requireString(args, 'path')); const content = requireString(args, 'content')
+      if (managedArtifactPaths.has(filePath)) throw new Error('MANAGED_ARTIFACT_IMMUTABLE: save a staged file and register a revision')
       await mkdir(path.dirname(filePath), { recursive: true }); await writeFile(filePath, content, 'utf8'); const info = await stat(filePath); return { path: filePath, size_bytes: info.size, modified_ms: info.mtimeMs }
     }
     case 'open_path': {
@@ -104,7 +140,8 @@ async function invoke(command: string, args: Record<string, unknown>): Promise<u
       if (draft.summary && Object.prototype.hasOwnProperty.call(draft.summary, 'reference_document')) {
         draft.summary.reference_document = await freezeReferenceDocumentRequest(draft.summary.reference_document, assertGrantedPath)
       }
-      return runtime.request('workflow.submit', { draft: await host.trustedWorkflowDraft(draft) }, requireString(args, 'operationId'))
+      const result = await runtime.request('workflow.submit', { draft: await host.trustedWorkflowDraft(draft) }, requireString(args, 'operationId'))
+      return retainWorkflowResult(result)
     }
     case 'workflow_v2_resummarize': {
       const requestedSummary = structuredClone(args.summary as Record<string, any>)
@@ -112,26 +149,38 @@ async function invoke(command: string, args: Record<string, unknown>): Promise<u
         requestedSummary.reference_document = await freezeReferenceDocumentRequest(requestedSummary.reference_document, assertGrantedPath)
       }
       const summary = await host.trustedSummaryRecipe(requestedSummary)
-      return runtime.request('workflow.resummarize', {
+      const result = await runtime.request('workflow.resummarize', {
         source_workflow_id: requireString(args, 'sourceWorkflowId'),
         expected_attempt_id: requireString(args, 'expectedAttemptId'),
         expected_sequence: args.expectedSequence,
         input_artifact_id: requireString(args, 'inputArtifactId'),
         summary,
       }, requireString(args, 'operationId'))
+      return retainWorkflowResult(result)
     }
-    case 'workflow_v2_list': return runtime.request('workflow.list', { statuses: args.statuses ?? [], cursor: null, limit: 100 })
-    case 'workflow_v2_get': return runtime.request('workflow.get', { workflow_id: requireString(args, 'workflowId'), timeline_limit: args.timelineLimit ?? 200 })
-    case 'workflow_v2_clear': return runtime.request('workflow.clear', { workflow_id: requireString(args, 'workflowId') }, requireString(args, 'operationId'))
-    case 'workflow_v2_control': return runtime.request('workflow.control', { workflow_id: requireString(args, 'workflowId'), expected_attempt_id: requireString(args, 'expectedAttemptId'), action: requireString(args, 'action') }, requireString(args, 'operationId'))
-    case 'workflow_v2_retry': return runtime.request('workflow.retry', { workflow_id: requireString(args, 'workflowId'), expected_attempt_id: requireString(args, 'expectedAttemptId'), expected_sequence: args.expectedSequence, from_stage: requireString(args, 'fromStage'), input_artifact_id: args.inputArtifactId ?? null }, requireString(args, 'operationId'))
-    case 'workflow_v2_register_revision': return runtime.request('artifact.register_revision', args.params as Record<string, unknown>, requireString(args, 'operationId'))
+    case 'workflow_v2_list': {
+      const result = await runtime.request('workflow.list', { statuses: args.statuses ?? [], cursor: null, limit: 100 })
+      await replaceOutputRootsFromSnapshots(Array.isArray((result as { items?: unknown }).items) ? (result as { items: unknown[] }).items : [])
+      return result
+    }
+    case 'workflow_v2_get': return retainWorkflowResult(await runtime.request('workflow.get', { workflow_id: requireString(args, 'workflowId'), timeline_limit: args.timelineLimit ?? 200 }))
+    case 'workflow_v2_clear': {
+      const result = await runtime.request('workflow.clear', { workflow_id: requireString(args, 'workflowId') }, requireString(args, 'operationId'))
+      const remaining = await runtime.request('workflow.list', { statuses: [], cursor: null, limit: 100 })
+      await replaceOutputRootsFromSnapshots(Array.isArray((remaining as { items?: unknown }).items) ? (remaining as { items: unknown[] }).items : [])
+      return result
+    }
+    case 'workflow_v2_control': return retainWorkflowResult(await runtime.request('workflow.control', { workflow_id: requireString(args, 'workflowId'), expected_attempt_id: requireString(args, 'expectedAttemptId'), action: requireString(args, 'action') }, requireString(args, 'operationId')))
+    case 'workflow_v2_retry': return retainWorkflowResult(await runtime.request('workflow.retry', { workflow_id: requireString(args, 'workflowId'), expected_attempt_id: requireString(args, 'expectedAttemptId'), expected_sequence: args.expectedSequence, from_stage: requireString(args, 'fromStage'), input_artifact_id: args.inputArtifactId ?? null }, requireString(args, 'operationId')))
+    case 'workflow_v2_register_revision': return retainWorkflowResult(await runtime.request('artifact.register_revision', args.params as Record<string, unknown>, requireString(args, 'operationId')))
     case 'workflow_v2_shutdown': await runtime.shutdown(); return { state: 'stopped', active_workflow_ids: [] }
     default: throw new Error(`Unsupported desktop command: ${command}`)
   }
 }
 
 async function createWindow(): Promise<void> {
+  persistentOutputRoots.clear()
+  for (const root of await loadOutputPathGrants(outputPathGrantsFile)) persistentOutputRoots.add(root)
   await host.initialize()
   const stateDir = process.env.ASR_LOCAL_STATE_DIR
   const legacyOutputs = legacyOutputsDir
@@ -142,6 +191,12 @@ async function createWindow(): Promise<void> {
       await mkdir(stateDir, { recursive: true })
       await copyFile(source, target)
     }
+  }
+  try {
+    const result = await runtime.request('workflow.list', { statuses: [], cursor: null, limit: 100 })
+    await replaceOutputRootsFromSnapshots(Array.isArray((result as { items?: unknown }).items) ? (result as { items: unknown[] }).items : [])
+  } catch (error) {
+    logger.error('Workflow path authorization reconciliation failed', { message: String(error) })
   }
   mainWindow = new BrowserWindow({
     width: 1360, height: 900, minWidth: 1100, minHeight: 720, show: false,
@@ -182,6 +237,15 @@ runtime.on('workflow-event', (payload: any) => {
         message: String(error),
       })
       console.error('Credential grant rejected:', error)
+      void runtime.request('secret.reject', buildSecretRejectParams(payload))
+        .catch((rejectError) => {
+          logger.error('Credential rejection delivery failed', {
+            workflowId: String(payload.workflow_id ?? ''),
+            attemptId: String(payload.attempt_id ?? ''),
+            secretRequestId: String(payload.data.secret_request_id ?? ''),
+            message: String(rejectError),
+          })
+        })
     })
 })
 runtime.on('protocol-error', (error) => { logger.error('Workflow protocol error', { message: String(error) }); console.error(error) })

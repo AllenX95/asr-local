@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { reduceWorkflowEvent, WorkflowEventError } from './reducer'
+import { applyWorkflowSnapshot, reduceWorkflowEvent, WorkflowEventError } from './reducer'
 import type { WorkflowEvent, WorkflowSnapshot } from './types'
 
 function snapshot(overrides: Partial<WorkflowSnapshot> = {}): WorkflowSnapshot {
@@ -48,6 +48,39 @@ describe('workflow event reducer', () => {
     const current = snapshot({ sequence: 5, status: 'queued', attempt: { attempt_id: 'att_002', number: 2, stage_attempts: {} } })
     const late = snapshot({ sequence: 6, status: 'completed', stage: 'completed', attempt: { attempt_id: 'att_001', number: 1, stage_attempts: {} } })
     expect(reduceWorkflowEvent(current, event(late))).toBe(current)
+  })
+
+  it('accepts a newer attempt and validates the first event for an unknown workflow', () => {
+    const first = snapshot()
+    expect(reduceWorkflowEvent(undefined, event(first))).toBe(first)
+
+    const nextAttempt = snapshot({
+      sequence: 6,
+      status: 'queued',
+      attempt: { attempt_id: 'att_002', number: 2, stage_attempts: {} },
+    })
+    expect(applyWorkflowSnapshot(snapshot({ sequence: 5 }), nextAttempt)).toBe(nextAttempt)
+  })
+
+  it('rejects invalid unseen snapshots and conflicting ids within one attempt number', () => {
+    const invalid = snapshot({ sequence: 0 })
+    expect(() => reduceWorkflowEvent(undefined, event(invalid))).toThrow(WorkflowEventError)
+
+    const current = snapshot({ sequence: 5 })
+    const conflicting = snapshot({
+      sequence: 6,
+      attempt: { attempt_id: 'att_conflict', number: 1, stage_attempts: {} },
+    })
+    expect(() => applyWorkflowSnapshot(current, conflicting)).toThrow('ATTEMPT_ID_MISMATCH')
+
+    const sameSequenceConflict = snapshot({
+      sequence: 5,
+      attempt: { attempt_id: 'att_conflict', number: 1, stage_attempts: {} },
+    })
+    expect(() => applyWorkflowSnapshot(current, sameSequenceConflict)).toThrow('SNAPSHOT_IDENTITY_CONFLICT')
+
+    const invalidStatus = snapshot({ status: 'unknown' as WorkflowSnapshot['status'] })
+    expect(() => applyWorkflowSnapshot(undefined, invalidStatus)).toThrow('INVALID_WORKFLOW_SNAPSHOT')
   })
 
   it('rejects duplicated routing fields that disagree with state', () => {

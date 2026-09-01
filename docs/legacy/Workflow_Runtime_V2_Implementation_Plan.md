@@ -1,8 +1,8 @@
 # WorkflowRuntime v2 分阶段开发计划
 
-> 历史规划文档：本文的双 ASR 方案已被 [`2026-07-12-qwen-only-single-runtime-design.md`](superpowers/specs/2026-07-12-qwen-only-single-runtime-design.md) 取代。Qwen3-ASR + Pyannote 是当前唯一的本地链路；MOSS 描述仅保留作历史记录。
+> **历史归档（superseded）**：本文的双 ASR 方案已被 [`2026-07-12-qwen-only-single-runtime-design.md`](../superpowers/specs/2026-07-12-qwen-only-single-runtime-design.md) 取代。Qwen3-ASR + Pyannote 是当前唯一的本地链路；MOSS 描述仅保留作历史记录。
 
-本文档把 [PRD](../PRD_Workflow_Runtime_V2.md)、[Domain Glossary](../CONTEXT.md) 和 [Worker Contract v2](./worker-contract-v2.md) 拆成可执行阶段。计划以保留现有 Tauri 版本可运行、主线程拥有集成改动、跨层通过 contract fixture 协作为原则。
+本文档把 [PRD](./PRD_Workflow_Runtime_V2.md)、[Domain Glossary](../../CONTEXT.md) 和 [Worker Contract v2](../worker-contract-v2.md) 拆成可执行阶段。计划以保留现有 Tauri 版本可运行、主线程拥有集成改动、跨层通过 contract fixture 协作为原则。
 
 ## 1. 计划摘要
 
@@ -19,7 +19,7 @@
 
 ### 当前实施状态（2026-07-10）
 
-- Phase 0 基线已记录在 [`docs/Phase0_Baseline.md`](./Phase0_Baseline.md)：v1 health/typecheck/Rust test 通过；当前 Python runtime 缺少 torch/transformers，MOSS 真实推理 gate 保持关闭。
+- Phase 0 基线已记录在 [`Phase0_Baseline.md`](./Phase0_Baseline.md)：v1 health/typecheck/Rust test 通过；当前 Python runtime 缺少 torch/transformers，MOSS 真实推理 gate 保持关闭。
 - Phase 1 已建立 `contracts/workflow-v2/schemas` 与 `fixtures`、独立 Python `app.ipc.v2` codec、Rust `workflow_contract_v2` 类型、TypeScript `WorkflowRuntime` seam、纯 reducer、fake adapter 和 Pinia workflow store。
 - Phase 2 骨架已建立 `app.workflow.registry`、`WorkflowSupervisor`、三槽位 scheduler、启动 interrupted recovery、artifact revision/stale 传播和 `--contract v2` stdio server；真实 Tauri client 尚未切换。
 - Phase 3 的安全护栏已先落地：MOSS integrated diarization 不再经过 v1 的 30 秒切片，replacement 不再进入 ASR Prompt，任务规格记录本地模型 identity/revision/config digest/path，并新增 CPU/GPU RuntimePlan 和独立 native smoke script。
@@ -568,4 +568,4 @@ model_replicas = 默认 1
 - Phase 5 的 Tauri v2 client、后台 event reader、Pinia workflow store、一键工作流页、catalog 版本化、DPAPI native grant、timeline 与 artifact revision editor 已实现。
 - Phase 6 的三并发/第四任务排队、drain、失败隔离、输出冲突、Cloud no-auth/bearer fake smoke 已覆盖；真实 MOSS/Cloud provider 与硬件长音频基准仍是发布 gate。
 - Phase 7 的 `npm run tauri:build` 已生成 MSI/NSIS，release executable 已启动 smoke；v1 仍是显式兼容入口，Electron 仍等待 Phase 8 决策门。
-- 2026-07-10 已在隔离 `.venv-moss313` 中完成 MOSS native CPU smoke 和 v2 production end-to-end smoke；模型 revision、依赖版本和结果记录在 [`docs/Phase0_Baseline.md`](./Phase0_Baseline.md)。30/60/90 分钟真实语料、目标 GPU 和长时三并发稳定性仍未验收。
+- 2026-07-10 已在隔离 `.venv-moss313` 中完成 MOSS native CPU smoke 和 v2 production end-to-end smoke；模型 revision、依赖版本和结果记录在 [`Phase0_Baseline.md`](./Phase0_Baseline.md)。30/60/90 分钟真实语料、目标 GPU 和长时三并发稳定性仍未验收。

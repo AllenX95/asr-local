@@ -25,7 +25,22 @@ describe('Electron packaging configuration', () => {
     expect(fastPackageScript).toContain('Assert-PackagedRuntime $stagedAppDir');
     expect(fastPackageScript).toContain('Assert-TargetAppStopped');
     expect(fastPackageScript.indexOf('Assert-PackagedRuntime $stagedAppDir'))
-      .toBeLessThan(fastPackageScript.indexOf('Move-Item -LiteralPath $stagedAppDir'));
+      .toBeLessThan(fastPackageScript.indexOf('Move-SafeDirectoryAtomic $stagedAppDir $targetAppDir'));
     expect(runtimeBuildScript).toContain('imageio_ffmpeg.get_ffmpeg_exe()');
+  });
+
+  it('cleans main output, excludes test sources, and packages runtime dependencies once', () => {
+    const packageJson = JSON.parse(readFileSync(resolve(projectDir, 'package.json'), 'utf-8'));
+    const electronTsconfig = JSON.parse(readFileSync(resolve(projectDir, 'tsconfig.electron.json'), 'utf-8'));
+    const cleanScript = readFileSync(resolve(projectDir, 'electron/cleanMainBuild.cjs'), 'utf-8');
+
+    expect(packageJson.scripts?.['electron:compile']).toContain('node electron/cleanMainBuild.cjs');
+    expect(cleanScript).toContain("path.join(projectDir, 'dist-electron')");
+    expect(electronTsconfig.exclude).toContain('electron/**/*.spec.ts');
+    expect(packageJson.build?.files).toEqual([
+      'dist/**/*',
+      'dist-electron/**/*',
+      'package.json'
+    ]);
   });
 });

@@ -2,7 +2,7 @@
 
 本文档定义桌面受信任层与 Python WorkflowRuntime supervisor 之间的第二版协议。它取代 v1 的阻塞式 `run_job` 与 lane 控制模型，以持久工作流任务、异步事件、任务级控制和可恢复快照为核心。
 
-配套文档：[PRD](../PRD_Workflow_Runtime_V2.md)、[Domain Glossary](../CONTEXT.md)、[实施计划](./Workflow_Runtime_V2_Implementation_Plan.md)。
+配套文档：[历史 PRD](./legacy/PRD_Workflow_Runtime_V2.md)、[Domain Glossary](../CONTEXT.md)、[历史实施计划](./legacy/Workflow_Runtime_V2_Implementation_Plan.md)。
 
 ## 1. 规范范围
 
@@ -72,7 +72,7 @@ v2 不暴露：
 | `protocol_version` | 是 | 固定为 `2` |
 | `kind` | 是 | 固定为 `request` |
 | `request_id` | 是 | 当前连接上的 request/response correlation ID |
-| `operation_id` | 条件 | 第 5.2 节列出的持久业务操作必须提供；实例级 `runtime.shutdown` 和含秘密的 `secret.provide` 不使用 |
+| `operation_id` | 条件 | 第 5.2 节列出的持久业务操作必须提供；实例级 `runtime.shutdown`、`secret.provide` 和 `secret.reject` 不使用 |
 | `method` | 是 | 命名空间方法名 |
 | `params` | 是 | 方法参数 object |
 
@@ -179,7 +179,7 @@ v2 不暴露：
 
 ### 5.2 Operation idempotency
 
-- `workflow.submit`、`workflow.control`、`workflow.retry` 和 `artifact.register_revision` 必须提供 `operation_id`。
+- `workflow.submit`、`workflow.resummarize`、`workflow.control`、`workflow.retry`、`workflow.clear` 和 `artifact.register_revision` 必须提供 `operation_id`。
 - supervisor 必须持久保存变更操作的 canonical payload digest 与逻辑结果。
 - 相同 `operation_id` 和相同 canonical payload 重发时，返回同一逻辑结果。
 - 相同 `operation_id` 被用于不同 method 或不同 payload 时，返回 `OPERATION_ID_REUSED`。
@@ -245,12 +245,15 @@ Response：
         "runtime.capabilities",
         "prompt.preview",
         "workflow.submit",
+        "workflow.resummarize",
         "workflow.list",
         "workflow.get",
+        "workflow.clear",
         "workflow.control",
         "workflow.retry",
         "artifact.register_revision",
         "secret.provide",
+        "secret.reject",
         "runtime.shutdown"
       ],
       "pipeline_profiles": [
@@ -353,7 +356,7 @@ Response：
 | `summary.model` | Profile 默认模型或 Summary Recipe 的显式覆盖；`model_source` 必须说明来源 |
 | `summary.credential_ref` | `bearer` 时必填 opaque identity，`none` 时必须为 `null` |
 | `summary.provider_binding_sha256` | 必须等于按键名字典序序列化的 `{auth_mode, base_url, model, profile_id, profile_version}` 紧凑 JSON UTF-8 SHA-256 |
-| `summary.policy_snapshot` | 可选历史兼容字段；新任务由 desktop host 无条件注入 `{ "id": "asr-primary-reference-advisory", "version": 1 }`，worker 只接受该精确对象，不由 renderer 选择或覆盖 |
+| `summary.policy_snapshot` | 旧 Registry 快照读取时可缺省；新 submit/resummarize 请求由 desktop host 无条件注入 `{ "id": "asr-primary-reference-advisory", "version": 1 }`，Schema 与 worker 都要求该精确对象，不由 renderer 选择或覆盖 |
 | `summary.template.prompt_snapshot` | 必填，最多 32000 字符 |
 | `summary.context_strategy` | `auto`、`single_pass` 或 `hierarchical` |
 | `input_token_budget` | 正整数，由 Summary Profile 默认并可在能力范围内覆盖 |
@@ -962,7 +965,7 @@ Request：
 规则：
 
 - grant 只存在于 supervisor 进程内存，作用域限定到 workflow、attempt、Profile ID/version、credential ref、purpose 和 provider binding。
-- grant 使用后、attempt 结束、超时或 supervisor 重启时立即失效。
+- grant 使用后、attempt 结束、超时或 supervisor 重启时立即失效；超过 `expires_at` 仍未授权时，等待方收到可重试的 `CREDENTIAL_TIMEOUT`。
 - 相同 `secret_request_id` 的重复授权返回当前接受结果；已过期或已经绑定到其他身份的请求被拒绝。
 - supervisor 不得记录原始 request line 或 secret 字段。
 - secret request 过期或身份不匹配时返回 `CREDENTIAL_REJECTED`。
@@ -972,7 +975,36 @@ Request：
 - `auth_mode=none` 时 `credential_ref=null`，supervisor 不得发出 `credentials_required` 或接受 `secret.provide`。
 - Python 字符串无法保证可靠内存清零；本地 supervisor 进程内存属于受信任范围。
 
-### 10.10 `runtime.shutdown`
+### 10.10 `secret.reject`
+
+desktop host 无法从受信任凭据存储授权请求时，必须显式拒绝，不得仅记录日志并让 workflow 无限停留在 `waiting_for_secret`。本方法不携带 secret，也不使用持久 `operation_id`。
+
+Request：
+
+```json
+{
+  "workflow_id": "wf_018f...",
+  "expected_attempt_id": "att_018f...",
+  "secret_request_id": "secret_req_018f...",
+  "profile_id": "summary-profile-uuid",
+  "profile_version": 4,
+  "credential_ref": "credential://summary/summary-profile-uuid",
+  "purpose": "summary_api",
+  "provider_binding_sha256": "hex-digest",
+  "code": "CREDENTIAL_REJECTED",
+  "message": "The trusted desktop host could not authorize this credential request.",
+  "lease_scope": "attempt"
+}
+```
+
+规则：
+
+- 请求身份必须与待处理 secret request 完全一致。
+- 拒绝会唤醒等待方并使当前 workflow 进入明确失败态；`CREDENTIAL_REJECTED` 默认不可自动重试。
+- `message` 只能描述拒绝原因，不得包含 secret、解密内容或安全存储原始错误数据。
+- 已过期、已消费或身份不匹配的拒绝请求返回 `CREDENTIAL_REJECTED`。
+
+### 10.11 `runtime.shutdown`
 
 不使用持久 `operation_id`。shutdown 只作用于当前 hello 返回的 `worker_instance_id`；同一进程内重复调用返回当前 shutdown state，进程重启后不存在跨实例 shutdown 去重语义。
 

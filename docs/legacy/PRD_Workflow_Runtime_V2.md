@@ -1,5 +1,7 @@
 # PRD：ASR Local 一键工作流与 WorkflowRuntime v2
 
+> **历史归档（superseded）**：本文记录 Tauri-first 的早期 Workflow Runtime 方案。当前实现以 [Electron 迁移报告](../Electron_Migration_Implementation_Report.md) 和 [Worker Contract v2](../worker-contract-v2.md) 为准。
+
 ## 文档信息
 
 - 文档类型：产品与工程重构 PRD
@@ -8,7 +10,7 @@
 - 目标平台：Windows 桌面优先
 - 初始桌面 adapter：Tauri 2 + Vue 3 + TypeScript
 - 核心运行时：Python WorkflowRuntime
-- 配套文档：[Domain Glossary](./CONTEXT.md)、[Worker Contract v2](./docs/worker-contract-v2.md)、[分阶段开发计划](./docs/Workflow_Runtime_V2_Implementation_Plan.md)
+- 配套历史文档：[Domain Glossary](../../CONTEXT.md)、[Worker Contract v2](../worker-contract-v2.md)、[分阶段开发计划](./Workflow_Runtime_V2_Implementation_Plan.md)
 
 ## Problem Statement
 

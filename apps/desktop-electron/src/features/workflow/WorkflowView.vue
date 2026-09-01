@@ -7,6 +7,7 @@ import { useAppStore } from '../../stores/appStore';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { taskControlActions } from '../../workflows/taskControls';
 import { chunkProgressLabel } from '../../workflows/progress';
+import { artifactStagingPath, describeUtf8Content } from '../../workflows/artifactRevision';
 import type { WorkflowDraft, WorkflowSnapshot } from '../../workflows/types';
 import { nextBaseNameForAudioSelection } from './workflowNaming';
 import { createTaskCenterState, toggleDiagnostics, toggleResummary } from './taskCenterState';
@@ -385,13 +386,6 @@ async function editArtifact(artifactId: string): Promise<void> {
   }
 }
 
-function stagingPath(path: string, workflowId: string): string {
-  const slash = Math.max(path.lastIndexOf('\\'), path.lastIndexOf('/'));
-  const directory = slash >= 0 ? path.slice(0, slash) : '.';
-  const outputRoot = directory.replace(/[\\/](?:transcripts|summary)$/u, '');
-  return `${outputRoot}/.staging/${workflowId}/edit-${crypto.randomUUID()}.md`;
-}
-
 async function saveArtifactRevision(): Promise<void> {
   const snapshot = selectedWorkflow.value;
   const artifact = snapshot?.artifacts.find((item) => item.artifact_id === editingArtifactId.value);
@@ -399,10 +393,9 @@ async function saveArtifactRevision(): Promise<void> {
   artifactSaving.value = true;
   artifactError.value = '';
   try {
-    const stagedPath = stagingPath(artifact.path, snapshot.workflow_id);
+    const stagedPath = artifactStagingPath(artifact.path, snapshot.workflow_id);
     await api.saveTextFile(stagedPath, artifactText.value);
-    const digestBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(artifactText.value));
-    const digest = Array.from(new Uint8Array(digestBuffer)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    const descriptor = await describeUtf8Content(artifactText.value);
     await workflowStore.registerRevision({
       workflow_id: snapshot.workflow_id,
       expected_attempt_id: snapshot.attempt.attempt_id,
@@ -410,8 +403,8 @@ async function saveArtifactRevision(): Promise<void> {
       source_artifact_id: artifact.artifact_id,
       kind: artifact.kind as 'transcript_markdown' | 'final_summary_markdown',
       staged_path: stagedPath,
-      size_bytes: new TextEncoder().encode(artifactText.value).byteLength,
-      sha256: digest,
+      size_bytes: descriptor.size_bytes,
+      sha256: descriptor.sha256,
     });
     editingArtifactId.value = null;
     artifactText.value = '';
@@ -505,7 +498,7 @@ function phaseLabel(value: string | null | undefined): string {
           <h1>一键工作流</h1>
           <p>上传录音 → {{ pipelineLabel }} 转录 → 选择模板总结 → 输出 Markdown。</p>
         </div>
-        <button class="primary" type="button" :disabled="submitting || !workflowStore.runtime || !privacyConfirmed" @click="submit">
+        <button class="primary" type="button" :disabled="submitting || !workflowStore.isReady || !privacyConfirmed" @click="submit">
           <Play :size="17" />
           {{ submitting ? '提交中' : '开始一键处理' }}
         </button>
