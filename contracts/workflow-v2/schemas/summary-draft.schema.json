@@ -34,7 +34,7 @@
       "additionalProperties": false,
       "required": ["id", "version"],
       "properties": {
-        "id": { "const": "asr-primary-reference-advisory" },
+        "id": { "enum": ["asr-primary-reference-advisory", "asr-reference-mutual-check"] },
         "version": { "const": 1 }
       }
     },

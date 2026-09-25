@@ -34,6 +34,10 @@ const managedArtifactPaths = new Set<string>()
 const outputPathGrantsFile = path.join(userDataDir, 'output-path-grants.json')
 
 function grantPath(target: string): string { const resolved = canonicalizeAccessPath(target); grantedPaths.add(resolved); return resolved }
+function dialogDefaultDirectory(environmentVariable: string): string {
+  const configured = process.env[environmentVariable]?.trim()
+  return configured && existsSync(configured) ? configured : app.getPath('documents')
+}
 function grantOutputRoot(target: string): string {
   const resolved = canonicalizeAccessPath(target)
   selectedOutputRoots.add(resolved)
@@ -91,12 +95,23 @@ async function invoke(command: string, args: Record<string, unknown>): Promise<u
   switch (command) {
     case 'get_app_info': return { project_root: projectRoot, outputs_dir: outputsDir, legacy_desktop_dir: desktopDir, worker_dir: workerDir, contract_version: 'workflow-contract-v2', logs: { directory: paths.logsDir, desktop_log_path: logger.paths.main, worker_log_path: logger.paths.worker, stdio_log_path: logger.paths.main } }
     case 'select_audio_file': {
-      const result = await dialog.showOpenDialog(mainWindow!, { properties: ['openFile'], filters: [{ name: 'Audio and video', extensions: ['wav', 'mp3', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'mp4', 'mov', 'mkv', 'webm'] }] })
+      const result = await dialog.showOpenDialog(mainWindow!, {
+        properties: ['openFile'],
+        defaultPath: dialogDefaultDirectory('ASR_LOCAL_AUDIO_DEFAULT_DIR'),
+        filters: [{ name: 'Audio and video', extensions: ['wav', 'mp3', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'mp4', 'mov', 'mkv', 'webm'] }]
+      })
       return result.canceled || !result.filePaths[0] ? null : grantPath(result.filePaths[0])
     }
     case 'select_markdown_file': {
-      const extensions = args.referenceOnly === true ? ['md', 'markdown'] : ['md', 'markdown', 'txt']
-      const result = await dialog.showOpenDialog(mainWindow!, { properties: ['openFile'], filters: [{ name: 'Markdown', extensions }] })
+      const isReferenceOnly = args.referenceOnly === true
+      const extensions = isReferenceOnly ? ['md', 'markdown'] : ['md', 'markdown', 'txt']
+      const result = await dialog.showOpenDialog(mainWindow!, {
+        properties: ['openFile'],
+        ...(isReferenceOnly
+          ? { defaultPath: dialogDefaultDirectory('ASR_LOCAL_REFERENCE_DEFAULT_DIR') }
+          : {}),
+        filters: [{ name: 'Markdown', extensions }]
+      })
       return result.canceled || !result.filePaths[0] ? null : grantPath(result.filePaths[0])
     }
     case 'select_output_dir': {

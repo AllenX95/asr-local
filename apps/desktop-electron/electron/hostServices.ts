@@ -14,8 +14,8 @@ const TOML = (existsSync(vendorTomlPath) ? require(vendorTomlPath) : require('@i
 type JsonObject = Record<string, any>
 const DEFAULT_SUMMARY_MAX_INPUT_TOKENS = 8000
 const DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS = 2000
-const SUMMARY_TEMPLATE_CATALOG_VERSION = 16
-const SUMMARY_POLICY_SNAPSHOT = Object.freeze({ id: 'asr-primary-reference-advisory', version: 1 })
+const SUMMARY_TEMPLATE_CATALOG_VERSION = 17
+const SUMMARY_POLICY_SNAPSHOT = Object.freeze({ id: 'asr-reference-mutual-check', version: 1 })
 export const MAX_REFERENCE_DOCUMENT_BYTES = 256 * 1024
 
 export interface ReferenceDocumentSnapshot {
@@ -142,6 +142,13 @@ function normalizedTemplateName(value: unknown): string {
   return String(value ?? '').trim().toLocaleLowerCase()
 }
 
+function migrateLegacySummaryTemplatePrompt(prompt: string): string {
+  const balancedPriority = '转录稿与参考速记共同作为本次交流的证据来源，不存在无条件的全局优先级。'
+  return prompt
+    .replace(/^(\s*\d+\.\s*)以转录稿为主要依据，参考速记仅作辅助核对专名、数字、结论和行动项；参考速记可能不完整或有误，不是金标准。/gmu, `$1${balancedPriority}`)
+    .replace('两者冲突时以转录稿为主', '两份材料共同作为证据，不预设全局优先级；名称校准不替换整句事实')
+}
+
 function catalogVersion(raw: JsonObject): number {
   const parsed = Number(raw.catalog_version ?? raw.template_catalog_version ?? 1)
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 1
@@ -256,7 +263,20 @@ export class HostServices {
       }
       if (index >= 0) {
         matchedTargetIndexes.add(index)
-        return { ...targetTemplates[index], ...item }
+        const targetTemplate = targetTemplates[index]
+        const migratedTemplate = { ...targetTemplate, ...item }
+        const targetTemplateVersion = Number.isInteger(Number(targetTemplate.version)) && Number(targetTemplate.version) > 0
+          ? Number(targetTemplate.version)
+          : 1
+        const sourceTemplateVersion = Number.isInteger(Number(item.version)) && Number(item.version) > 0
+          ? Number(item.version)
+          : 1
+        if (typeof targetTemplate.prompt === 'string') {
+          migratedTemplate.prompt = migrateLegacySummaryTemplatePrompt(targetTemplate.prompt)
+        }
+        const promptChanged = migratedTemplate.prompt !== targetTemplate.prompt
+        migratedTemplate.version = Math.max(targetTemplateVersion + (promptChanged ? 1 : 0), sourceTemplateVersion)
+        return migratedTemplate
       }
       return { ...item }
     }) : targetTemplates

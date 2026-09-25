@@ -45,7 +45,10 @@ class ContractV2CodecTests(unittest.TestCase):
         self.assertIn("policy_snapshot", schema["required"])
         policy = schema["properties"]["policy_snapshot"]
         self.assertFalse(policy["additionalProperties"])
-        self.assertEqual(policy["properties"]["id"]["const"], "asr-primary-reference-advisory")
+        self.assertEqual(
+            policy["properties"]["id"]["enum"],
+            ["asr-primary-reference-advisory", "asr-reference-mutual-check"],
+        )
         self.assertEqual(policy["properties"]["version"]["const"], 1)
 
     def test_submit_normalizes_hotwords_and_preserves_replacement(self) -> None:
@@ -194,12 +197,22 @@ class ContractV2CodecTests(unittest.TestCase):
             {"id": "asr-primary-reference-advisory", "version": 2},
             {"id": "asr-primary-reference-advisory", "version": True},
             {"id": "asr-primary-reference-advisory", "version": 1, "extra": True},
+            {"id": [], "version": 1},
+            {"id": {}, "version": 1},
         ):
             payload["params"]["draft"]["summary"]["policy_snapshot"] = policy
             with self.subTest(policy=policy):
                 with self.assertRaises(ProtocolError) as context:
                     decode_request(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                 self.assertEqual(context.exception.code, "INVALID_REQUEST")
+
+    def test_summary_policy_snapshot_accepts_mutual_check_and_preserves_legacy(self) -> None:
+        payload = json.loads((FIXTURES / "workflow-submit.request.json").read_text(encoding="utf-8"))
+        summary = payload["params"]["draft"]["summary"]
+        for policy_id in ("asr-primary-reference-advisory", "asr-reference-mutual-check"):
+            summary["policy_snapshot"] = {"id": policy_id, "version": 1}
+            decoded = decode_request(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+            self.assertEqual(decoded["params"]["draft"]["summary"]["policy_snapshot"], summary["policy_snapshot"])
 
     def test_response_is_utf8_jsonl(self) -> None:
         raw = encode_response("req_1", ok=True, result={"message": "完成"})
