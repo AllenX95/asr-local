@@ -10,8 +10,12 @@ from .errors import ProtocolError
 
 MAX_MESSAGE_BYTES = 1024 * 1024
 MAX_REFERENCE_DOCUMENT_BYTES = 256 * 1024
-SUMMARY_POLICY_ID = "asr-primary-reference-advisory"
+SUMMARY_POLICY_ID = "asr-reference-mutual-check"
 SUMMARY_POLICY_VERSION = 1
+SUPPORTED_SUMMARY_POLICIES = {
+    ("asr-primary-reference-advisory", 1),  # historical workflow snapshots
+    (SUMMARY_POLICY_ID, SUMMARY_POLICY_VERSION),
+}
 PROTOCOL = "asr-local-workflow"
 VERSION = 2
 PERSISTENT_OPERATION_METHODS = {
@@ -248,10 +252,15 @@ def _validate_provider(provider: Any, field: str) -> None:
 def _validate_summary_policy_snapshot(value: Any, field: str) -> None:
     if not isinstance(value, dict) or set(value) != {"id", "version"}:
         raise _error(f"{field} must contain exactly id and version.", field)
-    if value["id"] != SUMMARY_POLICY_ID:
+    if not isinstance(value["id"], str):
         raise _error(f"Unsupported summary policy id: {value['id']!r}.", field)
-    if not isinstance(value["version"], int) or isinstance(value["version"], bool) or value["version"] != SUMMARY_POLICY_VERSION:
+    if not isinstance(value["version"], int) or isinstance(value["version"], bool):
         raise _error(f"Unsupported summary policy version: {value['version']!r}.", field)
+    if (value["id"], value["version"]) not in SUPPORTED_SUMMARY_POLICIES:
+        raise _error(
+            f"Unsupported summary policy id/version: {value['id']!r}/{value['version']!r}.",
+            field,
+        )
 
 
 def _validate_reference_document(value: Any, field: str) -> None:

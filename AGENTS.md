@@ -11,6 +11,7 @@ Key paths:
 - `apps/desktop-electron/`: active Electron desktop application.
 - `apps/desktop-electron/src/`: Vue UI, stores, feature views, and frontend state.
 - `apps/desktop-electron/electron/`: Electron Main, Preload, desktop services, and Python runtime client.
+- `apps/worker-python/`: Python Workflow Runtime and its tests.
 - `config/`: runtime configuration.
 - `models/`: local model weights; do not commit.
 - `outputs/`: generated transcripts, summaries, logs, and local output artifacts; do not scan broadly.
@@ -22,13 +23,14 @@ Before editing:
 
 - Confirm the working directory is the current repository root that contains this `AGENTS.md`, and report the actual absolute path when it differs across machines.
 - Check current Git status if available. If Git is unavailable or inconsistent, say so and continue from filesystem evidence.
+- Preserve existing uncommitted changes; do not overwrite unrelated work.
 - Identify which layer the task touches: Vue UI, Pinia store, Electron Main/Preload, Python runtime, history/logging, build/release, or model/config.
-- Search with `rg`, excluding `outputs`, `models`, `.venv*`, `apps/desktop-electron/node_modules`, `apps/desktop-electron/dist`, `apps/desktop-electron/dist-electron`, `apps/desktop-electron/release-electron`, `tmp`, and `__pycache__`.
-- For bugs reported from screenshots, inspect logs and the event/command chain before changing UI state.
+- Search relevant source paths with `rg`. Exclude `outputs`, `models`, `.venv*`, `node_modules`, `apps/desktop-electron/runtime`, `apps/desktop-electron/dist`, `apps/desktop-electron/dist-electron`, `apps/desktop-electron/release-electron`, `tmp`, and `__pycache__` by default. Inspect excluded paths only when directly relevant, using a narrow scope.
+- For screenshot-reported layout bugs, inspect the relevant DOM or rendered view. For incorrect state or interaction behavior, inspect logs and the event/command chain before changing UI state.
 
 ## Common Commands
 
-Frontend commands from `apps/desktop-electron`:
+Desktop commands from `apps/desktop-electron`:
 
 ```powershell
 npm run typecheck
@@ -36,6 +38,22 @@ npm run build
 npm run electron:dev
 npm run electron:package
 ```
+
+Choose validation by the affected layer:
+
+| Layer | Validation |
+| --- | --- |
+| Vue / Pinia | `npm run typecheck`; `npm test -- <related-test-path>` for affected behavior |
+| Electron Main / Preload | `npx tsc -p tsconfig.electron.json --noEmit`; `npm run electron:compile` when compiled output and runtime dependency copying are needed |
+| Python runtime | From the repository root, use the existing test environment: `python -m pytest apps/worker-python/tests/<related-test-file> -q` |
+| Release / packaging | `npm run electron:package`, then launch the packaged application and verify the affected workflow |
+
+`npm run build` checks and builds the renderer; it does not compile Main/Preload.
+Use `npm test` or, from the repository root, `python -m pytest -q` when the
+change warrants broader regression coverage. Python requires 3.11 or newer;
+verify that the selected environment has pytest and the required dependencies.
+Run focused checks first and broaden them for affected dependencies or unresolved
+failures. Documentation-only changes need content/diff review, not application tests.
 
 User-facing launch scripts at repo root:
 
@@ -56,34 +74,28 @@ User-facing launch scripts at repo root:
 
 ## Task Flow
 
-Use this default flow:
-
-1. For cross-layer bugs, map the full chain first: UI action -> store -> preload bridge -> Electron Main -> Python runtime -> event/log update -> UI state.
-2. For broad refactors or performance reviews, do a read-only Top 5 assessment before implementation.
-3. For specific UI or runtime bugs, implement directly after preflight and run focused frontend/Python checks.
-4. For release fixes, rebuild through Electron Builder and verify actual startup rather than only compile success.
+- Read only the code and documentation needed for the task. Scale investigation to the uncertainty and impact of the change.
+- For cross-layer bugs, trace the affected chain: UI action -> store -> preload bridge -> Electron Main -> Python runtime -> event/log update -> UI state.
+- For broad refactors or performance reviews, first identify the main risks and affected boundaries. Do not force a fixed number of findings. Continue into implementation when the user has authorized it; assessment-only requests remain read-only.
+- For specific UI or runtime bugs, implement after focused investigation and run the relevant checks above.
+- For release fixes, rebuild through Electron Builder and verify actual startup rather than only compile success.
+- Complete authorized implementation through relevant validation and repair of failures caused by the change. Do not stop at the first implementation for routine approval. Report passed, failed, and unverified checks distinctly; if blocked, explain the evidence and the smallest missing input.
 
 ## Sub-Agent Use
 
-Use sub-agents for independent read-only investigations:
+Use a single agent for simple tasks. Delegate only bounded, independent work
+when parallel progress is likely to outweigh coordination overhead.
 
-- UI/store agent: Vue views, Pinia store, event registration, rendering.
-- Desktop agent: Electron Main/Preload, IPC permissions, worker process lifecycle.
-- Worker/log agent: Python worker protocol, output files, logs, history scanning.
-
-The main thread owns code edits and final integration. Do not let multiple agents edit overlapping renderer/Main/Python files.
+- Read-only investigation is the default. Split by the question being answered; UI/store, Desktop/IPC, and Python/logs are useful boundaries when relevant.
+- Independent implementation may be delegated within the authorized scope when file ownership and acceptance criteria are explicit. Do not let agents edit overlapping files or revert others' changes.
+- Each assignment must include the goal, relevant paths, constraints, acceptance criteria, and expected evidence. Return cross-layer dependencies, conflicting evidence, or unclear scope to the main thread.
+- When model selection is available, prefer Astra for ambiguous requirements, cross-layer diagnosis, lifecycle/concurrency reasoning, architectural decisions, and integration. Prefer GPT-6 Luna for focused inspection, configuration checks, independent tests, and well-specified local changes. Treat this as a preference, not a required model switch; use supported tools and report actual selection accurately.
+- The main thread owns scope, shared interface decisions, review, and final integration. Validate the combined result before claiming completion.
 
 ## Handoff Format
 
-End substantial tasks with:
-
-- `cwd`:
-- Goal:
-- Layer(s) touched:
-- Files read:
-- Files changed:
-- Commands run:
-- Validation result:
-- Unverified areas:
-- Key decisions:
-- Recommended next prompt:
+Scale the handoff to the task. For small changes, summarize the result, changed
+files, and validation. For substantial tasks, include the goal, affected layers,
+key decisions, changed files, checks run with results, and unverified areas.
+Include `cwd` when it differs from the expected workspace, files read when they
+help explain the evidence, and a recommended next step only when work remains.
