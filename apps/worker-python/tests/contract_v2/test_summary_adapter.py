@@ -1735,13 +1735,13 @@ Q: 创始人甲成宇负责项目。
         for rule in required_rules:
             self.assertIn(rule, SYSTEM_RULES)
 
-    def test_bundled_first_meeting_template_is_catalog_v11_without_diligence_or_action_sections(self) -> None:
+    def test_bundled_first_meeting_template_is_catalog_v12_without_diligence_or_action_sections(self) -> None:
         config_path = Path(__file__).resolve().parents[4] / "config" / "summary_templates.toml"
         with config_path.open("rb") as handle:
             catalog = tomllib.load(handle)
-        self.assertEqual(catalog["catalog_version"], 17)
+        self.assertEqual(catalog["catalog_version"], 18)
         first_meeting = next(item for item in catalog["templates"] if item["name"] == "首次交流模板")
-        self.assertEqual(first_meeting["version"], 11)
+        self.assertEqual(first_meeting["version"], 12)
         self.assertIn("## 一、公司概览", first_meeting["prompt"])
         self.assertIn("## 十、待核实事项", first_meeting["prompt"])
         self.assertNotIn("## 十、待核实与后续尽调问题", first_meeting["prompt"])
@@ -1778,12 +1778,12 @@ Q: 创始人甲成宇负责项目。
         config_path = Path(__file__).resolve().parents[4] / "config" / "summary_templates.toml"
         with config_path.open("rb") as handle:
             catalog = tomllib.load(handle)
-        self.assertEqual(catalog["catalog_version"], 17)
+        self.assertEqual(catalog["catalog_version"], 18)
         expected_versions = {
-            "summary-template-team-interview": 14,
-            "summary-template-customer-interview": 9,
-            "summary-template-general": 9,
-            "summary-template-first-meeting": 11,
+            "summary-template-team-interview": 15,
+            "summary-template-customer-interview": 10,
+            "summary-template-general": 10,
+            "summary-template-first-meeting": 12,
         }
         by_id = {item["id"]: item for item in catalog["templates"]}
         for template_id, version in expected_versions.items():
@@ -2049,9 +2049,9 @@ Q: 创始人甲成宇负责项目。
 
         asyncio.run(scenario())
 
-    def test_real_v11_first_meeting_is_prompt_only_for_old_output_constraints(self) -> None:
+    def test_real_v12_first_meeting_is_prompt_only_for_old_output_constraints(self) -> None:
         template = bundled_first_meeting_template()
-        self.assertEqual(template["version"], 11)
+        self.assertEqual(template["version"], 12)
         transcript = "公司于2024年成立。创始人甲成宇负责项目，融资额为100万元。"
         reference = "创始人甲春雨负责项目。"
         draft = """# 纪要
