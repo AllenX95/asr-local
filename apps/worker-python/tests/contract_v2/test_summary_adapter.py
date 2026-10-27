@@ -74,6 +74,73 @@ def bundled_first_meeting_template(version: int | None = None) -> dict:
 
 
 class SummaryAdapterTests(unittest.TestCase):
+    def test_mimo_profile_budget_accepts_reference_larger_than_old_default(self) -> None:
+        calls: list[dict] = []
+        reference = "会议讨论产品路线和后续计划。" * 1_000
+
+        def request(_url, payload, _headers):
+            calls.append(payload)
+            return "# 纪要\n已整理会议内容。"
+
+        async def scenario() -> None:
+            request_spec = spec("auto", budget=851_968, reference=reference)
+            request_spec["summary"]["model"] = "mimo-v2.6-flash"
+            request_spec["summary"]["base_url"] = "https://api.xiaomimimo.com/v1"
+            request_spec["summary"]["max_output_tokens"] = 131_072
+            result = await OpenAICompatibleSummaryGenerator(request_fn=request).summarize(
+                request_spec, {"text": "本次会议讨论产品路线。"}, "att_mimo_large_reference"
+            )
+            self.assertEqual(result["strategy"], "single_pass")
+
+        asyncio.run(scenario())
+        self.assertIn(reference, calls[0]["messages"][1]["content"])
+        self.assertEqual(calls[0]["max_completion_tokens"], 131_072)
+        self.assertNotIn("max_tokens", calls[0])
+
+    def test_mimo_third_party_endpoint_keeps_openai_compatible_max_tokens(self) -> None:
+        calls: list[dict] = []
+
+        def request(_url, payload, _headers):
+            calls.append(payload)
+            return "# 纪要\n已整理会议内容。"
+
+        async def scenario() -> None:
+            request_spec = spec("single_pass", budget=8_000)
+            request_spec["summary"]["model"] = "mimo-v2.6-flash"
+            await OpenAICompatibleSummaryGenerator(request_fn=request).summarize(
+                request_spec, {"text": "会议讨论了产品。"}, "att_mimo_proxy"
+            )
+
+        asyncio.run(scenario())
+        self.assertEqual(calls[0]["max_tokens"], 321)
+        self.assertNotIn("max_completion_tokens", calls[0])
+
+    def test_summary_receives_each_reference_with_its_filename(self) -> None:
+        calls: list[dict] = []
+
+        def request(_url, payload, _headers):
+            calls.append(payload)
+            return "# Summary\nMeeting notes."
+
+        async def scenario() -> None:
+            request_spec = spec("single_pass", budget=8000)
+            request_spec["summary"]["reference_documents"] = [
+                {"name": "first.md", "content": "First unique evidence."},
+                {"name": "second.md", "content": "Second unique evidence."},
+            ]
+            await OpenAICompatibleSummaryGenerator(request_fn=request).summarize(
+                request_spec, {"text": "Meeting transcript."}, "att_multiple_references"
+            )
+
+        asyncio.run(scenario())
+        self.assertIn("多篇参考速记是独立材料", calls[0]["messages"][0]["content"])
+        user_prompt = calls[0]["messages"][1]["content"]
+        self.assertIn("first.md", user_prompt)
+        self.assertIn("First unique evidence.", user_prompt)
+        self.assertIn("second.md", user_prompt)
+        self.assertIn("Second unique evidence.", user_prompt)
+        self.assertLess(user_prompt.index("First unique evidence."), user_prompt.index("Second unique evidence."))
+
     def test_clean_constrained_summary_uses_one_provider_call(self) -> None:
         calls: list[dict] = []
         constrained_template = "融资章节固定表头：轮次｜金额/估值｜已发生动作｜尚未发生动作｜计划日期。"

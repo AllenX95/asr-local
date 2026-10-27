@@ -32,7 +32,7 @@
       "required": ["recording_background", "hotwords", "extra_instruction"],
       "properties": {
         "recording_background": { "type": "string", "maxLength": 4000 },
-        "hotwords": { "type": "array", "maxItems": 200, "items": { "type": "string", "minLength": 1, "maxLength": 64 } },
+        "hotwords": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "extra_instruction": { "type": "string", "maxLength": 1000 }
       }
     },

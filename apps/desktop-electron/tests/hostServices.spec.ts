@@ -12,7 +12,7 @@ vi.mock('electron', () => ({
   },
 }))
 
-import { HostServices, MAX_REFERENCE_DOCUMENT_BYTES, freezeReferenceDocumentRequest, readReferenceDocumentSnapshot } from '../electron/hostServices.js'
+import { HostServices, freezeReferenceDocumentRequest, freezeReferenceDocumentRequests, readReferenceDocumentSnapshot } from '../electron/hostServices.js'
 
 describe('HostServices trusted workflow draft', () => {
   it('migrates a local v16 catalog to bundled v17 without overwriting customized prompts', async () => {
@@ -177,13 +177,13 @@ describe('HostServices trusted workflow draft', () => {
 
     await host.saveTemplate('新模板', '新 prompt')
     const saved = await readFile(filePath, 'utf8')
-    expect(saved).toContain('catalog_version = 17')
+    expect(saved).toContain('catalog_version = 18')
     expect(saved).toContain('owner = "keep"')
     expect(saved).not.toContain('template_catalog_version')
 
     await host.deleteTemplate('旧模板')
     const deleted = await readFile(filePath, 'utf8')
-    expect(deleted).toContain('catalog_version = 17')
+    expect(deleted).toContain('catalog_version = 18')
     expect(deleted).toContain('owner = "keep"')
   })
 
@@ -229,7 +229,27 @@ describe('HostServices trusted workflow draft', () => {
     expect(await freezeReferenceDocumentRequest(null, authorizePath)).toBeNull()
   })
 
-  it('rejects unsupported extension, empty content, invalid UTF-8 and oversized files', async () => {
+  it('freezes each authorized reference independently and permits TXT only for hotword extraction', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'asr-local-reference-multiple-'))
+    const first = path.join(root, 'first.md')
+    const second = path.join(root, 'second.markdown')
+    const text = path.join(root, 'terms.txt')
+    await Promise.all([writeFile(first, '# first'), writeFile(second, '# second'), writeFile(text, 'Orion')])
+    const authorize = vi.fn((filePath: string) => {
+      if (![first, second, text].includes(filePath)) throw new Error('not authorized')
+      return filePath
+    })
+    const snapshots = await freezeReferenceDocumentRequests([{ path: first }, { path: second }], authorize)
+    expect(snapshots.map((item) => [item.name, item.content])).toEqual([['first.md', '# first'], ['second.markdown', '# second']])
+    await writeFile(first, '# changed')
+    expect(snapshots[0].content).toBe('# first')
+    await expect(freezeReferenceDocumentRequests([{ path: first }, { path: 'forbidden.md' }], authorize)).rejects.toThrow('not authorized')
+    await expect(freezeReferenceDocumentRequests([{ path: text }], authorize)).rejects.toThrow('only .md and .markdown')
+    await expect(freezeReferenceDocumentRequests([null], authorize)).rejects.toThrow('cannot contain null')
+    await expect(freezeReferenceDocumentRequest({ path: text }, authorize, { allowTextFiles: true })).resolves.toMatchObject({ content: 'Orion' })
+  })
+
+  it('rejects unsupported extension, empty content and invalid UTF-8', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'asr-local-reference-invalid-'))
     const txtPath = path.join(root, 'notes.txt')
     await writeFile(txtPath, 'notes', 'utf8')
@@ -240,9 +260,17 @@ describe('HostServices trusted workflow draft', () => {
     const invalidPath = path.join(root, 'invalid.md')
     await writeFile(invalidPath, Buffer.from([0xc3, 0x28]))
     await expect(readReferenceDocumentSnapshot(invalidPath)).rejects.toThrow('valid UTF-8')
-    const largePath = path.join(root, 'large.md')
-    await writeFile(largePath, Buffer.alloc(MAX_REFERENCE_DOCUMENT_BYTES + 1, 0x61))
-    await expect(readReferenceDocumentSnapshot(largePath)).rejects.toThrow('exceeds')
+  })
+
+  it('freezes a reference larger than the former file-size limit without truncation', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'asr-local-reference-large-'))
+    const filePath = path.join(root, 'large.md')
+    const content = '参考内容'.repeat(30_000)
+    await writeFile(filePath, content, 'utf8')
+    const snapshot = await freezeReferenceDocumentRequest({ path: filePath }, (selected) => selected)
+    expect(snapshot?.size_bytes).toBe(Buffer.byteLength(content, 'utf8'))
+    expect(snapshot?.content).toBe(content)
+    expect(snapshot?.sha256).toBe(createHash('sha256').update(content, 'utf8').digest('hex'))
   })
 
   it('does not accept renderer-supplied reference metadata as a trusted snapshot', async () => {
@@ -261,6 +289,38 @@ describe('HostServices trusted workflow draft', () => {
         reference_document: { path: 'notes.md', content: 'forged', size_bytes: 6, sha256: '0'.repeat(64) },
       },
     })).rejects.toThrow('frozen by the desktop host')
+    await expect(host.trustedWorkflowDraft({
+      summary: {
+        profile_id: catalogs.summary_profiles[0].id,
+        profile_version: catalogs.summary_profiles[0].version,
+        template: { id: catalogs.summary_templates[0].id, version: catalogs.summary_templates[0].version },
+        reference_documents: [{ path: 'notes.md', content: 'forged', size_bytes: 6, sha256: '0'.repeat(64) }],
+      },
+    })).rejects.toThrow('frozen by the desktop host')
+  })
+
+  it('retains every frozen reference in trusted submission and resummary recipes', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'asr-local-reference-recipe-'))
+    const configDir = path.join(root, 'config')
+    await mkdir(configDir)
+    await writeFile(path.join(configDir, 'summary_profiles.toml'), '[[profiles]]\nname = "Profile"\nbase_url = "https://example.test/v1"\nmodel = "model"\n')
+    await writeFile(path.join(configDir, 'summary_templates.toml'), '[[templates]]\nname = "Template"\nprompt = "总结"\n')
+    const first = path.join(root, 'one.md')
+    const second = path.join(root, 'two.md')
+    await writeFile(first, '参'.repeat(100_000))
+    await writeFile(second, 'second')
+    const references = await freezeReferenceDocumentRequests([{ path: first }, { path: second }], (selected) => selected)
+    const host = new HostServices(root, configDir, path.join(root, 'outputs'))
+    const catalogs = await host.catalogs()
+    const summary = {
+      profile_id: catalogs.summary_profiles[0].id,
+      profile_version: catalogs.summary_profiles[0].version,
+      template: { id: catalogs.summary_templates[0].id, version: catalogs.summary_templates[0].version },
+      reference_documents: references,
+    }
+    expect((await host.trustedWorkflowDraft({ summary })).summary.reference_documents).toEqual(references)
+    expect((await host.trustedSummaryRecipe(summary)).reference_documents).toEqual(references)
+    await expect(host.trustedSummaryRecipe({ ...summary, reference_document: null })).rejects.toThrow('not both')
   })
 
   it('injects the immutable summary policy into every trusted recipe and ignores renderer overrides', async () => {
@@ -367,6 +427,48 @@ describe('HostServices trusted workflow draft', () => {
       max_output_tokens: 8192,
     })
     expect(saved.profiles[0]).toMatchObject({ max_input_tokens: 16000, max_output_tokens: 8192 })
+  })
+
+  it('uses the effective MiMo limits for loaded profiles, workflow submissions and resummaries', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'asr-local-mimo-limits-'))
+    const configDir = path.join(root, 'config')
+    await mkdir(configDir)
+    const profilePath = path.join(configDir, 'summary_profiles.toml')
+    const config = [
+      '[[profiles]]', 'name = "MiMo Flash"', 'model = "mimo-v2.6-flash"',
+      'base_url = "https://api.xiaomimimo.com/v1"', 'max_input_tokens = 1024000', 'max_output_tokens = 131072',
+      'encrypted_api_key = "safe-storage:v1:c2VjcmV0"', '',
+      '[[profiles]]', 'name = "MiMo Custom"', 'model = "mimo-v2.6-pro"',
+      'base_url = "https://api.xiaomimimo.com/v1"', 'max_input_tokens = 40000', 'max_output_tokens = 4000', '',
+      '[[profiles]]', 'name = "MiMo Default"', 'model = "mimo-v2.6-pro"',
+      'base_url = "https://api.xiaomimimo.com/v1"', '',
+    ].join('\n')
+    await writeFile(profilePath, config)
+    await writeFile(path.join(configDir, 'summary_templates.toml'), '[[templates]]\nname = "Template"\nprompt = "总结"\n')
+    const host = new HostServices(root, configDir, path.join(root, 'outputs'))
+    const catalogs = await host.catalogs()
+    const profile = catalogs.summary_profiles.find((item: { name: string }) => item.name === 'MiMo Flash')
+    const custom = catalogs.summary_profiles.find((item: { name: string }) => item.name === 'MiMo Custom')
+    const defaults = catalogs.summary_profiles.find((item: { name: string }) => item.name === 'MiMo Default')
+    const template = catalogs.summary_templates[0]
+    expect(profile).toMatchObject({ max_input_tokens: 851_968, max_output_tokens: 131_072, has_api_key: true })
+    expect(custom).toMatchObject({ max_input_tokens: 40_000, max_output_tokens: 4_000 })
+    expect(defaults).toMatchObject({ max_input_tokens: 966_656, max_output_tokens: 16_384 })
+    expect(await readFile(profilePath, 'utf8')).toBe(config)
+    const summary = {
+      profile_id: profile.id,
+      profile_version: profile.version,
+      template: { id: template.id, version: template.version },
+    }
+    expect((await host.trustedWorkflowDraft({ summary })).summary)
+      .toMatchObject({ input_token_budget: 851_968, max_output_tokens: 131_072 })
+    expect(await host.trustedSummaryRecipe(summary))
+      .toMatchObject({ input_token_budget: 851_968, max_output_tokens: 131_072 })
+    const saved = await host.saveProfile('summary', {
+      ...profile, api_key: '', max_input_tokens: 1_024_000, max_output_tokens: 131_072,
+    })
+    expect(saved.profiles.find((item: { name: string }) => item.name === 'MiMo Flash'))
+      .toMatchObject({ max_input_tokens: 851_968, max_output_tokens: 131_072, has_api_key: true })
   })
 
   it('resolves a migrated legacy credential by the normalized catalog identity', async () => {

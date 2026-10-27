@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { ChevronDown, ChevronRight, Clock3, FolderOpen, Pause, Play, RefreshCw, RotateCcw, Square, Trash2 } from '@lucide/vue';
 import { api } from '../../ipc/desktopClient';
-import type { PipelineProfile, WorkflowCatalogs, WorkflowSummaryProfile, WorkflowSummaryTemplate } from '../../ipc/workerTypes';
+import type { PipelineProfile, ReferenceHotwordExtractionResult, WorkflowCatalogs, WorkflowSummaryProfile, WorkflowSummaryTemplate } from '../../ipc/workerTypes';
 import { useAppStore } from '../../stores/appStore';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { taskControlActions } from '../../workflows/taskControls';
@@ -11,6 +11,17 @@ import { artifactStagingPath, describeUtf8Content } from '../../workflows/artifa
 import type { WorkflowDraft, WorkflowSnapshot } from '../../workflows/types';
 import { nextBaseNameForAudioSelection } from './workflowNaming';
 import { createTaskCenterState, toggleDiagnostics, toggleResummary } from './taskCenterState';
+import {
+  isSameReferenceHotwordRequest,
+  formatReferenceHotwordError,
+  matchingReferenceHotwordProfiles,
+  mergeReferenceHotwords,
+  parseHotwordInput,
+  preferredReferenceHotwordProfileId,
+  REFERENCE_HOTWORDS_MODEL,
+  type ReferenceHotwordRequestIdentity,
+} from './referenceHotwords';
+import { buildWorkflowDraft } from './workflowDraft';
 
 const appStore = useAppStore();
 const workflowStore = useWorkflowStore();
@@ -25,7 +36,10 @@ const devicePolicy = ref<'auto' | 'cpu' | 'cuda'>('auto');
 const pipelineProfile = ref<Exclude<PipelineProfile, 'cloud_asr'>>('pyannote_qwen3_asr');
 const selectedProfileName = ref('');
 const selectedTemplateName = ref('');
-const referenceMarkdownPath = ref('');
+const referenceMarkdownPaths = ref<string[]>([]);
+const hotwordSourcePath = ref('');
+const additionalHotwordPaths = ref<string[]>([]);
+const referenceHotwordProfileId = ref('');
 const privacyConfirmed = ref(false);
 const error = ref('');
 const controlErrors = ref<Record<string, string>>({});
@@ -44,6 +58,13 @@ const resummaryProfileName = ref('');
 const resummaryTemplateName = ref('');
 const resummaryPrivacyConfirmed = ref(false);
 const resummarizing = ref(false);
+const referenceHotwordError = ref('');
+const referenceHotwordNotice = ref('');
+const busyReferenceHotwordRequestId = ref<string | null>(null);
+const cancellingReferenceHotwordRequestId = ref<string | null>(null);
+const activeReferenceHotwordRequest = ref<ReferenceHotwordRequestIdentity | null>(null);
+const referenceHotwordsBusy = computed(() => busyReferenceHotwordRequestId.value !== null);
+const manualHotwordCount = computed(() => parseHotwordInput(hotwordsText.value).length);
 const pyannoteReady = computed(() => appStore.settings.models?.pyannote_exists ?? false);
 const qwenReady = computed(() => appStore.settings.models?.qwen_exists ?? false);
 const runtimeReadiness = computed(() => (appStore.settings.health?.model_readiness ?? null) as Record<string, any> | null);
@@ -75,6 +96,22 @@ const availableTemplates = computed<WorkflowSummaryTemplate[]>(() => {
 const selectedProfile = computed(() =>
   availableProfiles.value.find((profile) => profile.name === selectedProfileName.value) ?? null,
 );
+const referenceHotwordProfiles = computed(() => matchingReferenceHotwordProfiles(catalogs.value.summary_profiles));
+const selectedReferenceHotwordProfile = computed(() =>
+  referenceHotwordProfiles.value.find((profile) => profile.id === referenceHotwordProfileId.value) ?? null,
+);
+const hotwordSourceOptions = computed(() => [...new Set([...referenceMarkdownPaths.value, ...additionalHotwordPaths.value])]);
+const referenceHotwordAuthorizationText = computed(() => {
+  if (!hotwordSourcePath.value.trim()) return '请选择用于提取热词的文本文件。';
+  const profile = selectedReferenceHotwordProfile.value;
+  if (!profile) {
+    return `请在设置中添加模型为 ${REFERENCE_HOTWORDS_MODEL} 的总结 Profile 并配置 API Key。`;
+  }
+  if (profile.auth_mode !== 'bearer') {
+    return `所选 Profile 尚未配置 API Key。请在设置中为 ${REFERENCE_HOTWORDS_MODEL} Profile 填写并保存密钥。`;
+  }
+  return `将所选文本文件发送到 ${profile.base_url}，使用模型 ${REFERENCE_HOTWORDS_MODEL} 提取热词。`;
+});
 const selectedTemplate = computed(() =>
   availableTemplates.value.find((template) => template.name === selectedTemplateName.value) ?? null,
 );
@@ -91,7 +128,7 @@ const resummaryProviderAuthorizationText = computed(() => {
 const providerAuthorizationText = computed(() => {
   const notices: string[] = [];
   if (selectedProfile.value) {
-    notices.push(referenceMarkdownPath.value.trim()
+    notices.push(referenceMarkdownPaths.value.length
       ? `转录文本和参考速记将发送到 ${selectedProfile.value.base_url}，使用模型 ${selectedProfile.value.model}`
       : `转录文本将发送到 ${selectedProfile.value.base_url}，使用模型 ${selectedProfile.value.model}`);
   }
@@ -102,8 +139,21 @@ const pipelineLabel = computed(() => 'Qwen3-ASR');
 watch(selectedProfileName, () => {
   privacyConfirmed.value = false;
 });
-watch(referenceMarkdownPath, () => {
+watch(referenceMarkdownPaths, () => {
   privacyConfirmed.value = false;
+});
+watch(hotwordSourcePath, () => {
+  referenceHotwordError.value = '';
+  referenceHotwordNotice.value = '';
+  cancelActiveReferenceHotwordRequest();
+});
+watch(() => {
+  const profile = selectedReferenceHotwordProfile.value;
+  return profile ? `${profile.id}:${profile.version}` : '';
+}, () => {
+  referenceHotwordError.value = '';
+  referenceHotwordNotice.value = '';
+  cancelActiveReferenceHotwordRequest();
 });
 watch(resummaryProfileName, () => {
   resummaryPrivacyConfirmed.value = false;
@@ -128,6 +178,10 @@ watch(
       catalogs.value = value;
       if (!selectedProfileName.value) selectedProfileName.value = value.summary_profiles[0]?.name || '';
       if (!selectedTemplateName.value) selectedTemplateName.value = value.summary_templates[0]?.name || '';
+      if (!referenceHotwordProfileId.value) {
+        const currentSummaryProfile = value.summary_profiles.find((profile) => profile.name === (selectedProfileName.value || value.summary_profiles[0]?.name));
+        referenceHotwordProfileId.value = preferredReferenceHotwordProfileId(value.summary_profiles, currentSummaryProfile ?? null);
+      }
     }).catch((reason) => {
       error.value = String(reason);
     });
@@ -137,12 +191,76 @@ watch(
   { immediate: true },
 );
 
-function parseHotwords(): string[] {
-  return hotwordsText.value
-    .split(/[\n,，]/u)
-    .map((item) => item.trim())
-    .filter(Boolean);
+function isCurrentReferenceHotwordRequest(identity: ReferenceHotwordRequestIdentity): boolean {
+  return isSameReferenceHotwordRequest(identity, activeReferenceHotwordRequest.value)
+    && identity.referencePath === hotwordSourcePath.value.trim()
+    && identity.profileId === selectedReferenceHotwordProfile.value?.id
+    && identity.profileVersion === selectedReferenceHotwordProfile.value?.version;
 }
+
+function cancelActiveReferenceHotwordRequest(): void {
+  const request = activeReferenceHotwordRequest.value;
+  if (!request) return;
+  activeReferenceHotwordRequest.value = null;
+  cancellingReferenceHotwordRequestId.value = request.requestId;
+  void api.cancelReferenceHotwords(request.requestId).catch(() => undefined);
+}
+
+function cancelReferenceHotwordExtraction(): void {
+  if (!activeReferenceHotwordRequest.value) return;
+  referenceHotwordError.value = '';
+  referenceHotwordNotice.value = '已请求取消提取，现有热词未变。';
+  cancelActiveReferenceHotwordRequest();
+}
+
+async function extractReferenceHotwords(): Promise<void> {
+  const referencePath = hotwordSourcePath.value.trim();
+  const profile = selectedReferenceHotwordProfile.value;
+  if (!referencePath) {
+    referenceHotwordError.value = '请先选择用于提取热词的文本文件。';
+    return;
+  }
+  if (!profile) {
+    referenceHotwordError.value = `请先在设置中添加模型为 ${REFERENCE_HOTWORDS_MODEL} 的总结 Profile。`;
+    return;
+  }
+  if (profile.auth_mode !== 'bearer') {
+    referenceHotwordError.value = '所选 MiMo Profile 未配置 API Key，请到设置中填写并保存。';
+    return;
+  }
+  if (referenceHotwordsBusy.value || submitting.value) return;
+
+  referenceHotwordError.value = '';
+  referenceHotwordNotice.value = '';
+  const identity: ReferenceHotwordRequestIdentity = {
+    requestId: crypto.randomUUID(),
+    referencePath,
+    profileId: profile.id,
+    profileVersion: profile.version,
+  };
+  activeReferenceHotwordRequest.value = identity;
+  busyReferenceHotwordRequestId.value = identity.requestId;
+  try {
+    const result: ReferenceHotwordExtractionResult = await api.extractReferenceHotwords({
+      requestId: identity.requestId,
+      referencePath: identity.referencePath,
+      profileId: identity.profileId,
+      profileVersion: identity.profileVersion,
+    });
+    if (!isCurrentReferenceHotwordRequest(identity)) return;
+    const merged = mergeReferenceHotwords(hotwordsText.value, result.terms);
+    hotwordsText.value = merged.text;
+    referenceHotwordNotice.value = `已合并：新增 ${merged.added_count} 项，过滤无效或重复结果 ${result.rejected_count} 项。`;
+  } catch (reason) {
+    if (isCurrentReferenceHotwordRequest(identity)) referenceHotwordError.value = formatReferenceHotwordError(reason);
+  } finally {
+    if (busyReferenceHotwordRequestId.value === identity.requestId) busyReferenceHotwordRequestId.value = null;
+    if (cancellingReferenceHotwordRequestId.value === identity.requestId) cancellingReferenceHotwordRequestId.value = null;
+    if (activeReferenceHotwordRequest.value?.requestId === identity.requestId) activeReferenceHotwordRequest.value = null;
+  }
+}
+
+onBeforeUnmount(cancelActiveReferenceHotwordRequest);
 
 async function chooseAudio(): Promise<void> {
   const selected = await api.selectAudioFile();
@@ -158,12 +276,25 @@ async function chooseOutputDir(): Promise<void> {
 }
 
 async function chooseReferenceMarkdown(): Promise<void> {
-  const selected = await api.selectReferenceMarkdownFile();
-  if (selected) referenceMarkdownPath.value = selected;
+  const selected = await api.selectReferenceMarkdownFiles();
+  if (!selected.length) return;
+  const paths = [...new Set([...referenceMarkdownPaths.value, ...selected])];
+  if (paths.length !== referenceMarkdownPaths.value.length) referenceMarkdownPaths.value = paths;
+  if (!hotwordSourcePath.value) hotwordSourcePath.value = selected[0];
 }
 
-function clearReferenceMarkdown(): void {
-  referenceMarkdownPath.value = '';
+function removeReferenceMarkdown(path: string): void {
+  if (hotwordSourcePath.value === path && !additionalHotwordPaths.value.includes(path)) {
+    additionalHotwordPaths.value = [...additionalHotwordPaths.value, path];
+  }
+  referenceMarkdownPaths.value = referenceMarkdownPaths.value.filter((item) => item !== path);
+}
+
+async function chooseHotwordSource(): Promise<void> {
+  const selected = await api.selectMarkdownFile();
+  if (!selected) return;
+  if (!additionalHotwordPaths.value.includes(selected)) additionalHotwordPaths.value = [...additionalHotwordPaths.value, selected];
+  hotwordSourcePath.value = selected;
 }
 
 function buildDraft(): WorkflowDraft {
@@ -173,57 +304,27 @@ function buildDraft(): WorkflowDraft {
   if (!template) throw new Error('请先在设置中创建一个总结模板。');
   if (appStore.initialized && !pyannoteReady.value) throw new Error('未检测到 Pyannote 模型，请先在设置中配置模型路径。');
   if (appStore.initialized && (!qwenReady.value || !qwenRuntimeReady.value)) throw new Error('Qwen3-ASR 模型或 Python inference runtime 不可用，请检查依赖和模型路径。');
-  const authMode = profile.auth_mode;
-  return {
-    draft_version: 2,
-    display_name: baseName.value.trim() || 'meeting',
-    source: { path: sourcePath.value.trim() },
-    transcription: {
-      pipeline_profile: pipelineProfile.value,
-      pipeline_profile_version: 1,
-      device_policy: devicePolicy.value,
-      audio: {
-        channel_strategy: 'mixdown',
-      },
-      language: { mode: 'auto', value: null },
-      prompt_input: {
-        recording_background: recordingBackground.value,
-        hotwords: parseHotwords(),
-        extra_instruction: extraInstruction.value,
-      },
-      postprocess: { replacements: [], keep_fillers: true, auto_punctuation: true },
-      cloud_profile: null,
-    },
-    summary: {
-      profile_id: profile.id,
-      profile_version: profile.version,
-      base_url: profile.base_url,
-      auth_mode: authMode,
-      model: profile.model,
-      model_source: 'profile_default',
-      credential_ref: authMode === 'bearer' ? `summary:${profile.id}` : null,
-      provider_binding_sha256: profile.provider_binding_sha256,
-      template: {
-        id: template.id,
-        version: template.version,
-        name: template.name,
-        prompt_snapshot: template.prompt,
-      },
-      context_strategy: 'auto',
-      input_token_budget: profile.max_input_tokens,
-      max_output_tokens: profile.max_output_tokens,
-      reference_document: referenceMarkdownPath.value.trim() ? { path: referenceMarkdownPath.value.trim() } : null,
-    },
-    output: {
-      directory: outputDir.value.trim() || 'outputs',
-      base_name: baseName.value.trim() || 'meeting',
-      collision_policy: 'unique_suffix',
-    },
-  };
+  return buildWorkflowDraft({
+    baseName: baseName.value,
+    sourcePath: sourcePath.value,
+    pipelineProfile: pipelineProfile.value,
+    devicePolicy: devicePolicy.value,
+    recordingBackground: recordingBackground.value,
+    hotwordsText: hotwordsText.value,
+    extraInstruction: extraInstruction.value,
+    profile,
+    template,
+    referenceMarkdownPaths: referenceMarkdownPaths.value,
+    outputDir: outputDir.value,
+  });
 }
 
 async function submit(): Promise<void> {
   error.value = '';
+  if (referenceHotwordsBusy.value) {
+    error.value = '请等待热词提取结束后再提交。';
+    return;
+  }
   if (!sourcePath.value.trim()) {
     error.value = '请选择音频文件。';
     return;
@@ -496,9 +597,10 @@ function phaseLabel(value: string | null | undefined): string {
       <header class="panel-header">
         <div>
           <h1>一键工作流</h1>
+          <small class="field-hint">热词提取实验版</small>
           <p>上传录音 → {{ pipelineLabel }} 转录 → 选择模板总结 → 输出 Markdown。</p>
         </div>
-        <button class="primary" type="button" :disabled="submitting || !workflowStore.isReady || !privacyConfirmed" @click="submit">
+        <button class="primary" type="button" :disabled="submitting || referenceHotwordsBusy || !workflowStore.isReady || !privacyConfirmed" @click="submit">
           <Play :size="17" />
           {{ submitting ? '提交中' : '开始一键处理' }}
         </button>
@@ -579,15 +681,15 @@ function phaseLabel(value: string | null | undefined): string {
         </select>
       </label>
 
-      <label>
+      <div class="field-group reference-documents">
         <span>参考速记（可选）</span>
-        <div class="input-action">
-          <input :value="referenceMarkdownPath" type="text" readonly placeholder="选择 Markdown 速记，提交时会冻结内容" />
-          <button type="button" title="选择参考速记" @click="chooseReferenceMarkdown"><FolderOpen :size="17" /></button>
-          <button v-if="referenceMarkdownPath" type="button" title="清除参考速记" @click="clearReferenceMarkdown"><Trash2 :size="17" /></button>
+        <div v-for="path in referenceMarkdownPaths" :key="path" class="input-action">
+          <input :value="path" :title="path" aria-label="参考速记文件" type="text" readonly />
+          <button type="button" :aria-label="`移除参考速记 ${path}`" title="移除此参考速记" @click="removeReferenceMarkdown(path)"><Trash2 :size="17" /></button>
         </div>
-        <small class="field-hint">参考速记只用于总结阶段，作为辅助证据；源文件在提交后修改或删除不会影响本次任务。</small>
-      </label>
+        <button type="button" class="reference-add-button" @click="chooseReferenceMarkdown"><FolderOpen :size="17" /> 添加参考速记</button>
+        <small class="field-hint">可选择多篇 Markdown 速记用于总结；总内容需符合总结模型的上下文限制。提交时会冻结内容，源文件之后的修改不会影响本次任务。</small>
+      </div>
 
       <label>
         <span>录音背景</span>
@@ -595,11 +697,59 @@ function phaseLabel(value: string | null | undefined): string {
       </label>
 
       <div class="two-col">
-        <label>
-          <span>热词（每行一个）</span>
-          <textarea v-model="hotwordsText" rows="4" placeholder="Qwen\nASR Local" />
-        </label>
-        <label>
+        <div class="field-group">
+          <label>
+            <span>热词（每行一个）</span>
+            <textarea v-model="hotwordsText" rows="4" placeholder="Qwen\nASR Local" />
+            <small class="field-hint">
+              {{ manualHotwordCount }} 项（已去重）
+            </small>
+          </label>
+          <div class="privacy-confirmation">
+            <label>
+              <span>热词提取文本</span>
+              <div class="input-action">
+                <select v-model="hotwordSourcePath" aria-label="热词提取文本">
+                  <option value="">请选择文本文件</option>
+                  <option v-for="path in hotwordSourceOptions" :key="path" :value="path">
+                    {{ referenceMarkdownPaths.includes(path) ? '参考速记 · ' : '单独选择 · ' }}{{ path }}
+                  </option>
+                </select>
+                <button type="button" title="选择其他文本文件" aria-label="选择其他文本文件" @click="chooseHotwordSource"><FolderOpen :size="17" /></button>
+              </div>
+              <small class="field-hint">可选参考速记或单独选择 Markdown / TXT 文件；长文本会分段发送并合并热词，可能需要更长时间和产生更多用量。</small>
+            </label>
+            <label v-if="referenceHotwordProfiles.length > 1">
+              <span>热词提取 Profile</span>
+              <select v-model="referenceHotwordProfileId" :disabled="referenceHotwordsBusy">
+                <option value="">未选择</option>
+                <option v-for="profile in referenceHotwordProfiles" :key="profile.id" :value="profile.id">
+                  {{ profile.name }} · {{ profile.base_url }}
+                </option>
+              </select>
+            </label>
+            <strong v-else-if="selectedReferenceHotwordProfile">热词提取 Profile：{{ selectedReferenceHotwordProfile.name }}</strong>
+            <p>{{ referenceHotwordAuthorizationText }}</p>
+            <button
+              type="button"
+              :disabled="!hotwordSourcePath.trim() || !selectedReferenceHotwordProfile || selectedReferenceHotwordProfile.auth_mode !== 'bearer' || referenceHotwordsBusy || submitting"
+              @click="extractReferenceHotwords"
+            >
+              {{ referenceHotwordsBusy ? '正在提取…' : '发送文本并提取热词' }}
+            </button>
+            <button
+              v-if="referenceHotwordsBusy"
+              type="button"
+              :disabled="cancellingReferenceHotwordRequestId === busyReferenceHotwordRequestId"
+              @click="cancelReferenceHotwordExtraction"
+            >
+              {{ cancellingReferenceHotwordRequestId === busyReferenceHotwordRequestId ? '正在取消…' : '取消提取' }}
+            </button>
+            <div v-if="referenceHotwordError" class="workflow-error">{{ referenceHotwordError }}</div>
+            <small v-if="referenceHotwordNotice" class="field-hint">{{ referenceHotwordNotice }}</small>
+          </div>
+        </div>
+        <label class="transcription-instruction">
           <span>额外转录指令</span>
           <textarea v-model="extraInstruction" rows="4" placeholder="保留专有名词，不要编造内容。" />
         </label>

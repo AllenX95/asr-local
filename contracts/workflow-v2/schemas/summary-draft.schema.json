@@ -5,6 +5,7 @@
   "description": "Summary recipe after the trusted desktop host has resolved profile, credential binding, template, and policy snapshots.",
   "type": "object",
   "additionalProperties": false,
+  "not": { "required": ["reference_document", "reference_documents"] },
   "required": ["profile_id", "profile_version", "base_url", "auth_mode", "model", "model_source", "credential_ref", "provider_binding_sha256", "template", "context_strategy", "input_token_budget", "max_output_tokens", "policy_snapshot"],
   "properties": {
     "profile_id": { "type": "string", "minLength": 1 },
@@ -44,10 +45,14 @@
       "required": ["name", "content", "size_bytes", "sha256"],
       "properties": {
         "name": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "\\.(?:[mM][dD]|[mM][aA][rR][kK][dD][oO][wW][nN])$" },
-        "content": { "type": "string", "minLength": 1, "maxLength": 262144 },
-        "size_bytes": { "type": "integer", "minimum": 1, "maximum": 262144 },
+        "content": { "type": "string", "minLength": 1 },
+        "size_bytes": { "type": "integer", "minimum": 1 },
         "sha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" }
       }
+    },
+    "reference_documents": {
+      "type": "array",
+      "items": { "$ref": "#/properties/reference_document", "type": "object" }
     }
   }
 }

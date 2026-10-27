@@ -3,6 +3,13 @@ import { computed, reactive, watch } from 'vue';
 import { Save, Stethoscope, Trash2 } from '@lucide/vue';
 import { useAppStore } from '../../stores/appStore';
 import type { AsrCloudProfile, SummaryProfile } from '../../ipc/workerTypes';
+import {
+  DEFAULT_SUMMARY_INPUT_TOKENS,
+  DEFAULT_SUMMARY_OUTPUT_TOKENS,
+  isOfficialMimoV26,
+  recommendedMimoTokenLimits,
+  resolveSummaryTokenLimits,
+} from '../../../electron/summaryModelLimits';
 
 const store = useAppStore();
 const cloudAsrEnabled = false;
@@ -18,8 +25,8 @@ const profileDraft = reactive<SummaryProfile>({
   base_url: '',
   model: '',
   api_key: '',
-  max_input_tokens: 8000,
-  max_output_tokens: 2000,
+  max_input_tokens: DEFAULT_SUMMARY_INPUT_TOKENS,
+  max_output_tokens: DEFAULT_SUMMARY_OUTPUT_TOKENS,
 });
 
 const asrProfileDraft = reactive<AsrCloudProfile>({
@@ -60,9 +67,8 @@ watch(
 );
 
 watch(
-  () => store.summary.selectedProfileName,
-  (name) => {
-    const profile = store.summaryProfiles.profiles.find((item) => item.name === name);
+  () => store.summaryProfiles.profiles.find((item) => item.name === store.summary.selectedProfileName),
+  (profile) => {
     if (!profile) {
       return;
     }
@@ -70,6 +76,24 @@ watch(
   },
   { immediate: true }
 );
+
+const mimoProfile = computed(() => isOfficialMimoV26(profileDraft.model, profileDraft.base_url));
+const effectiveProfileLimits = computed(() => resolveSummaryTokenLimits(
+  profileDraft.model, profileDraft.base_url, profileDraft.max_input_tokens, profileDraft.max_output_tokens,
+));
+const mimoLimitsWillAdjust = computed(() => mimoProfile.value && (
+  effectiveProfileLimits.value.max_input_tokens !== profileDraft.max_input_tokens
+  || effectiveProfileLimits.value.max_output_tokens !== profileDraft.max_output_tokens
+));
+
+function applyMimoRecommendedLimits(): void {
+  Object.assign(profileDraft, recommendedMimoTokenLimits());
+}
+
+function applyMimoDefaultsIfUnchanged(): void {
+  if (mimoProfile.value && profileDraft.max_input_tokens === DEFAULT_SUMMARY_INPUT_TOKENS
+    && profileDraft.max_output_tokens === DEFAULT_SUMMARY_OUTPUT_TOKENS) applyMimoRecommendedLimits();
+}
 
 watch(
   () => store.summary.selectedTemplateName,
@@ -214,12 +238,17 @@ const healthRows = computed(() =>
         </label>
         <label>
           <span>Base URL</span>
-          <input v-model="profileDraft.base_url" type="text" />
+          <input v-model="profileDraft.base_url" type="text" @blur="applyMimoDefaultsIfUnchanged" />
         </label>
         <label>
           <span>Model</span>
-          <input v-model="profileDraft.model" type="text" />
+          <input v-model="profileDraft.model" type="text" @blur="applyMimoDefaultsIfUnchanged" />
         </label>
+        <template v-if="mimoProfile">
+          <small class="field-hint">MiMo-V2.6 上下文窗口为 1,048,576 tokens，输出最多 131,072 tokens。输入预算会预留输出额度，并为 token 估算另留 65,536 tokens；实际用量以服务商计数为准。</small>
+          <button type="button" @click="applyMimoRecommendedLimits">使用 MiMo 推荐容量</button>
+          <small v-if="mimoLimitsWillAdjust" class="field-hint">保存后将调整为输入 {{ effectiveProfileLimits.max_input_tokens.toLocaleString() }}、输出 {{ effectiveProfileLimits.max_output_tokens.toLocaleString() }} tokens。</small>
+        </template>
         <label>
           <span>Max Input Tokens</span>
           <input v-model.number="profileDraft.max_input_tokens" type="number" min="1" step="1" />

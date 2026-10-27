@@ -685,6 +685,30 @@ h2 {
   gap: 12px;
 }
 
+.field-group {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.reference-documents {
+  gap: 7px;
+}
+
+.reference-documents > span {
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.reference-add-button {
+  justify-self: start;
+}
+
+.transcription-instruction {
+  align-self: start;
+}
+
 .field-row {
   display: grid;
 }

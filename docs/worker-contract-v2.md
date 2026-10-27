@@ -475,7 +475,7 @@ supervisor 接受任务时生成并持久化：
 - Snapshot 不含 secret。
 - Prompt 与模板保存正文、版本和 digest，用于复现。
 - 本地 pipeline 的 `model_snapshot.components` 保存稳定模型 ID、revision、配置 digest 和解析路径；两个新本地 profile 都必须同时包含 `transcriber` 与 `diarization` component。旧 profile 仅为历史兼容。Cloud pipeline 的组件列表为空，身份由 `cloud_profile` 快照保存。
-- Summary Profile 拥有 endpoint、认证模式、credential ref、默认模型以及 `max_input_tokens` / `max_output_tokens`；缺省时分别兼容为 8000 / 2000。Summary Recipe 将这两个值快照为 `input_token_budget` / `max_output_tokens`，只有显式配置时才覆盖模型，`model_source` 记录最终来源。
+- Summary Profile 拥有 endpoint、认证模式、credential ref、默认模型以及 `max_input_tokens` / `max_output_tokens`；一般模型缺省时分别兼容为 8000 / 2000。小米官方 API 的 MiMo-V2.6 系列按 1,048,576 token 上下文和 131,072 token 最大输出计算预算，并为估算另留 65,536 tokens；未设置时默认输出 16,384 tokens。Summary Recipe 将有效值快照为 `input_token_budget` / `max_output_tokens`，只有显式配置时才覆盖模型，`model_source` 记录最终来源。[小米模型配置文档](https://mimo.mi.com/docs/en-US/tokenplan/integration/openclaw)
 - `summary.policy_snapshot` 是不进入模板目录的不可变产品策略。显式为 `asr-primary-reference-advisory` v1 时，Summary Adapter 使用 ASR 主依据、参考速记仅辅助的 generation-first 规则并旁路旧输出审计；缺失该字段的历史快照仅对首次交流模板 v8+ 做兼容推断，其他历史模板保持 legacy 行为。
 - `device_policy` 是用户意图，实际设备属于 RuntimePlan。
 - 任务执行前源文件 fingerprint 不一致时失败为 `SOURCE_CHANGED`。
