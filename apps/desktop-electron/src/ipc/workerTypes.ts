@@ -106,6 +106,24 @@ export interface WorkflowSummaryTemplate {
   prompt: string;
 }
 
+export interface ExtractReferenceHotwordsRequest {
+  requestId: string;
+  referencePath: string;
+  profileId: string;
+  profileVersion: number;
+}
+
+export interface ReferenceHotwordExtractionResult {
+  terms: string[];
+  model: string;
+  prompt_version: string;
+  reference_sha256: string;
+  reference_name: string;
+  usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null;
+  rejected_count: number;
+  elapsed_ms: number;
+}
+
 export interface WorkflowCatalogs {
   summary_profiles: WorkflowSummaryProfile[];
   summary_templates: WorkflowSummaryTemplate[];

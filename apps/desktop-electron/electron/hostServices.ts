@@ -6,17 +6,15 @@ import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
+import { resolveSummaryTokenLimits } from './summaryModelLimits.js'
 
 const require = createRequire(import.meta.url)
 const vendorTomlPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'vendor', 'toml', 'toml.js')
 const TOML = (existsSync(vendorTomlPath) ? require(vendorTomlPath) : require('@iarna/toml')) as typeof import('@iarna/toml')
 
 type JsonObject = Record<string, any>
-const DEFAULT_SUMMARY_MAX_INPUT_TOKENS = 8000
-const DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS = 2000
 const SUMMARY_TEMPLATE_CATALOG_VERSION = 18
 const SUMMARY_POLICY_SNAPSHOT = Object.freeze({ id: 'asr-reference-mutual-check', version: 1 })
-export const MAX_REFERENCE_DOCUMENT_BYTES = 256 * 1024
 
 export interface ReferenceDocumentSnapshot {
   name: string
@@ -37,7 +35,7 @@ function validateReferenceDocumentSnapshot(value: unknown): ReferenceDocumentSna
   const content = typeof input.content === 'string' ? input.content : null
   const sizeBytes = input.size_bytes
   const sha256 = typeof input.sha256 === 'string' ? input.sha256.toLowerCase() : ''
-  if (!name || name.includes('/') || name.includes('\\') || !content || !Number.isInteger(sizeBytes) || Number(sizeBytes) < 1 || Number(sizeBytes) > MAX_REFERENCE_DOCUMENT_BYTES || !/^[a-f0-9]{64}$/u.test(sha256)) {
+  if (!name || name.includes('/') || name.includes('\\') || !content || !Number.isSafeInteger(sizeBytes) || Number(sizeBytes) < 1 || !/^[a-f0-9]{64}$/u.test(sha256)) {
     throw new Error('INVALID_REQUEST: reference_document snapshot is invalid')
   }
   if (!/\.(?:md|markdown)$/iu.test(name)) {
@@ -53,10 +51,13 @@ function validateReferenceDocumentSnapshot(value: unknown): ReferenceDocumentSna
   return { name, content, size_bytes: actualSize, sha256 }
 }
 
-export async function readReferenceDocumentSnapshot(filePath: string): Promise<ReferenceDocumentSnapshot> {
+export async function readReferenceDocumentSnapshot(filePath: string, options: { allowTextFiles?: boolean } = {}): Promise<ReferenceDocumentSnapshot> {
   const resolved = path.resolve(filePath)
-  if (!/\.(?:md|markdown)$/iu.test(path.basename(resolved))) {
-    throw new Error('REFERENCE_DOCUMENT_INVALID: only .md and .markdown files are supported')
+  const extension = options.allowTextFiles ? /\.(?:md|markdown|txt)$/iu : /\.(?:md|markdown)$/iu
+  if (!extension.test(path.basename(resolved))) {
+    throw new Error(options.allowTextFiles
+      ? 'REFERENCE_DOCUMENT_INVALID: only .md, .markdown and .txt files are supported'
+      : 'REFERENCE_DOCUMENT_INVALID: only .md and .markdown files are supported')
   }
   let info
   try {
@@ -75,9 +76,6 @@ export async function readReferenceDocumentSnapshot(filePath: string): Promise<R
   }
   if (bytes.byteLength < 1) {
     throw new Error('REFERENCE_DOCUMENT_INVALID: reference document is empty')
-  }
-  if (bytes.byteLength > MAX_REFERENCE_DOCUMENT_BYTES) {
-    throw new Error(`REFERENCE_DOCUMENT_TOO_LARGE: reference document exceeds ${MAX_REFERENCE_DOCUMENT_BYTES} bytes`)
   }
   let content: string
   try {
@@ -101,6 +99,7 @@ export async function readReferenceDocumentSnapshot(filePath: string): Promise<R
 export async function freezeReferenceDocumentRequest(
   value: unknown,
   authorizePath: (requestedPath: string) => string | Promise<string>,
+  options: { allowTextFiles?: boolean } = {},
 ): Promise<ReferenceDocumentSnapshot | null> {
   if (value === null) return null
   if (!value || typeof value !== 'object' || Array.isArray(value) || typeof (value as Record<string, unknown>).path !== 'string') {
@@ -109,14 +108,36 @@ export async function freezeReferenceDocumentRequest(
   const requestedPath = (value as Record<string, unknown>).path as string
   if (!requestedPath.trim()) throw new Error('INVALID_REQUEST: reference_document path must be non-empty')
   const authorizedPath = await authorizePath(requestedPath)
-  return readReferenceDocumentSnapshot(authorizedPath)
+  return readReferenceDocumentSnapshot(authorizedPath, options)
+}
+
+export async function freezeReferenceDocumentRequests(
+  value: unknown,
+  authorizePath: (requestedPath: string) => string | Promise<string>,
+): Promise<ReferenceDocumentSnapshot[]> {
+  if (!Array.isArray(value)) throw new Error('INVALID_REQUEST: reference_documents must be an array')
+  const snapshots: ReferenceDocumentSnapshot[] = []
+  for (const item of value) {
+    const snapshot = await freezeReferenceDocumentRequest(item, authorizePath)
+    if (!snapshot) throw new Error('INVALID_REQUEST: reference_documents cannot contain null')
+    snapshots.push(snapshot)
+  }
+  return snapshots
+}
+
+function validateReferenceDocuments(input: JsonObject): void {
+  const hasSingle = Object.prototype.hasOwnProperty.call(input, 'reference_document')
+  const hasMultiple = Object.prototype.hasOwnProperty.call(input, 'reference_documents')
+  if (hasSingle && hasMultiple) throw new Error('INVALID_REQUEST: provide reference_document or reference_documents, not both')
+  if (hasSingle && input.reference_document !== null) {
+    input.reference_document = validateReferenceDocumentSnapshot(input.reference_document)
+  }
+  if (hasMultiple) {
+    if (!Array.isArray(input.reference_documents)) throw new Error('INVALID_REQUEST: reference_documents must be an array')
+    input.reference_documents = input.reference_documents.map(validateReferenceDocumentSnapshot)
+  }
 }
 const defaultModel = (modelPath: string, required: boolean, description: string) => ({ path: modelPath, required, description })
-
-function normalizeTokenLimit(value: unknown, fallback: number): number {
-  const parsed = Number(value)
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
-}
 
 async function readToml(filePath: string, fallback: JsonObject): Promise<JsonObject> {
   if (!existsSync(filePath)) return structuredClone(fallback)
@@ -185,10 +206,9 @@ function encryptSecret(secret: string): string {
 
 function normalizeProfile(raw: JsonObject, prefix: string): JsonObject {
   const name = String(raw.name ?? '').trim()
-  const summaryLimits = prefix === 'summary-profile-' ? {
-    max_input_tokens: normalizeTokenLimit(raw.max_input_tokens, DEFAULT_SUMMARY_MAX_INPUT_TOKENS),
-    max_output_tokens: normalizeTokenLimit(raw.max_output_tokens, DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS),
-  } : {}
+  const summaryLimits = prefix === 'summary-profile-'
+    ? resolveSummaryTokenLimits(raw.model, raw.base_url, raw.max_input_tokens, raw.max_output_tokens)
+    : {}
   return {
     id: String(raw.id ?? '').trim() || stableId(prefix, name),
     version: Math.max(Number(raw.version ?? 1), 1),
@@ -398,10 +418,11 @@ export class HostServices {
       base_url: String(input.base_url ?? '').trim(),
       model: String(input.model ?? '').trim(),
       encrypted_api_key: storedSecret,
-      ...(kind === 'summary' ? {
-        max_input_tokens: normalizeTokenLimit(input.max_input_tokens ?? previous?.max_input_tokens, DEFAULT_SUMMARY_MAX_INPUT_TOKENS),
-        max_output_tokens: normalizeTokenLimit(input.max_output_tokens ?? previous?.max_output_tokens, DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS),
-      } : {}),
+      ...(kind === 'summary' ? resolveSummaryTokenLimits(
+        input.model, input.base_url,
+        input.max_input_tokens ?? previous?.max_input_tokens,
+        input.max_output_tokens ?? previous?.max_output_tokens,
+      ) : {}),
     }
     if (index >= 0) profiles[index] = next; else profiles.push(next)
     profiles.sort((a, b) => String(a.name).localeCompare(String(b.name)))
@@ -419,11 +440,15 @@ export class HostServices {
     return this.loadProfiles(kind)
   }
 
-  async secretForProfile(kind: 'asr' | 'summary', profileId: string, version: number): Promise<string> {
+  async secretForProfile(kind: 'asr' | 'summary', profileId: string, version: number, binding?: { model: string; baseUrl: string }): Promise<string> {
     const filePath = path.join(this.configDir, kind === 'asr' ? 'asr_profiles.toml' : 'summary_profiles.toml')
     const raw = await readToml(filePath, { profiles: [] })
     const prefix = kind === 'asr' ? 'cloud-asr-profile-' : 'summary-profile-'
-    const profile = (raw.profiles ?? []).map((item: JsonObject) => normalizedProfileRecord(item, prefix)).find((item: JsonObject) => item.id === profileId && item.version === version)
+    const matches = (raw.profiles ?? []).map((item: JsonObject) => normalizedProfileRecord(item, prefix)).filter((item: JsonObject) => item.id === profileId && item.version === version
+      && (!binding || (item.model === binding.model && item.base_url === binding.baseUrl)))
+    // Legacy settings may share an ID/version across different models. Bound
+    // callers must resolve exactly one provider before decrypting its secret.
+    const profile = binding && matches.length !== 1 ? undefined : matches[0]
     if (!profile) throw new Error('CREDENTIAL_REJECTED: profile snapshot not found')
     const secret = decryptSecret(profile.encrypted_api_key)
     if (!secret) throw new Error('CREDENTIAL_REJECTED: profile credential is unavailable or requires migration')
@@ -500,14 +525,13 @@ export class HostServices {
       policy_snapshot: { ...SUMMARY_POLICY_SNAPSHOT },
       template: { id: template.id, version: template.version, name: template.name, prompt_snapshot: template.prompt },
       context_strategy: 'auto',
-      input_token_budget: normalizeTokenLimit(profile.max_input_tokens, DEFAULT_SUMMARY_MAX_INPUT_TOKENS),
-      max_output_tokens: normalizeTokenLimit(profile.max_output_tokens, DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS),
+      input_token_budget: profile.max_input_tokens,
+      max_output_tokens: profile.max_output_tokens,
     }
-    if (Object.prototype.hasOwnProperty.call(input, 'reference_document')) {
-      recipe.reference_document = input.reference_document === null
-        ? null
-        : validateReferenceDocumentSnapshot(input.reference_document)
-    }
+    const references = { ...input }
+    validateReferenceDocuments(references)
+    if (Object.prototype.hasOwnProperty.call(references, 'reference_document')) recipe.reference_document = references.reference_document
+    if (Object.prototype.hasOwnProperty.call(references, 'reference_documents')) recipe.reference_documents = references.reference_documents
     return recipe
   }
 
@@ -521,9 +545,7 @@ export class HostServices {
     const templates = await this.loadTemplates()
     const template = templates.find((item) => item.id === requested.template?.id && item.version === requested.template?.version)
     if (!template) throw new Error('SUMMARY_TEMPLATE_NOT_FOUND: trusted template version is unavailable')
-    if (Object.prototype.hasOwnProperty.call(requested, 'reference_document') && requested.reference_document !== null) {
-      requested.reference_document = validateReferenceDocumentSnapshot(requested.reference_document)
-    }
+    validateReferenceDocuments(requested)
     draft.summary = {
       ...requested,
       profile_id: profile.id,
@@ -531,8 +553,8 @@ export class HostServices {
       base_url: String(profile.base_url ?? '').trim(),
       auth_mode: authMode,
       model: String(profile.model ?? '').trim(),
-      input_token_budget: normalizeTokenLimit(profile.max_input_tokens, DEFAULT_SUMMARY_MAX_INPUT_TOKENS),
-      max_output_tokens: normalizeTokenLimit(profile.max_output_tokens, DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS),
+      input_token_budget: profile.max_input_tokens,
+      max_output_tokens: profile.max_output_tokens,
       model_source: 'profile_default',
       credential_ref: authMode === 'bearer' ? `summary:${profile.id}` : null,
       provider_binding_sha256: providerBindingDigest(profile, authMode),

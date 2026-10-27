@@ -813,6 +813,43 @@ class SupervisorTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_resummarize_inherits_all_references_unless_explicitly_cleared(self) -> None:
+        async def scenario() -> None:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                source = root / "source.wav"
+                source.write_bytes(b"audio")
+                registry = WorkflowRegistry(root / "registry.sqlite3")
+                supervisor = WorkflowSupervisor(registry, transcriber=CountingTranscriber(), summary_generator=CountingSummaryGenerator())
+                draft = make_draft(source, "multiple-references")
+                draft["output"]["directory"] = str(root / "outputs")
+                references = []
+                for name, content in (("one.md", "First note."), ("two.md", "Second note.")):
+                    references.append({"name": name, "content": content, "size_bytes": len(content.encode("utf-8")), "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest()})
+                draft["summary"]["reference_documents"] = references
+                submitted = await supervisor.submit(draft, operation_id="op_multi_source")
+                await supervisor._queue.join()
+                original = await supervisor.get(submitted["snapshot"]["workflow_id"])
+                transcript = next(item for item in original["artifacts"] if item["kind"] == "transcript_markdown")
+                recipe = {key: value for key, value in draft["summary"].items() if key != "reference_documents"}
+                base = {
+                    "source_workflow_id": original["workflow_id"],
+                    "expected_attempt_id": original["attempt"]["attempt_id"],
+                    "expected_sequence": original["sequence"],
+                    "input_artifact_id": transcript["artifact_id"],
+                }
+                inherited = await supervisor.resummarize({**base, "summary": recipe}, operation_id="op_multi_inherited")
+                self.assertEqual(inherited["snapshot"]["spec"]["summary"]["reference_documents"], references)
+                cleared = await supervisor.resummarize({**base, "summary": {**recipe, "reference_documents": []}}, operation_id="op_multi_cleared")
+                self.assertEqual(cleared["snapshot"]["spec"]["summary"]["reference_documents"], [])
+                legacy_clear = await supervisor.resummarize({**base, "summary": {**recipe, "reference_document": None}}, operation_id="op_multi_legacy_clear")
+                self.assertNotIn("reference_documents", legacy_clear["snapshot"]["spec"]["summary"])
+                await supervisor._queue.join()
+                await supervisor.shutdown(interrupt=False)
+                registry.close()
+
+        asyncio.run(scenario())
+
     def test_resummarize_creates_summary_only_workflow_from_transcript(self) -> None:
         async def scenario() -> None:
             with tempfile.TemporaryDirectory() as temp:

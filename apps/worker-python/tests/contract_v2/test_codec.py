@@ -4,6 +4,7 @@ import json
 import hashlib
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 from app.ipc.v2 import ProtocolError, decode_request, encode_event, encode_response
 
@@ -62,6 +63,29 @@ class ContractV2CodecTests(unittest.TestCase):
             [{"wrong": "ASRLocal", "correct": "ASR Local"}],
         )
 
+    def test_submit_accepts_hotword_lists_above_previous_limit(self) -> None:
+        payload = json.loads((FIXTURES / "workflow-submit.request.json").read_text(encoding="utf-8"))
+        prompt = payload["params"]["draft"]["transcription"]["prompt_input"]
+
+        for count in (201, 500):
+            with self.subTest(count=count):
+                hotwords = [f"hotword-{index:03d}" for index in range(count)]
+                prompt["hotwords"] = hotwords
+                decoded = decode_request(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                normalized = decoded["params"]["draft"]["transcription"]["prompt_input"]["hotwords"]
+                self.assertEqual(normalized, hotwords)
+                self.assertEqual(len(normalized), count)
+
+    def test_hotwords_still_require_a_list_of_strings(self) -> None:
+        payload = json.loads((FIXTURES / "workflow-submit.request.json").read_text(encoding="utf-8"))
+        prompt = payload["params"]["draft"]["transcription"]["prompt_input"]
+
+        for hotwords in ("Qwen", ["Qwen", 7]):
+            with self.subTest(hotwords=hotwords):
+                prompt["hotwords"] = hotwords
+                with self.assertRaises(ProtocolError) as context:
+                    decode_request(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                self.assertEqual(context.exception.code, "INVALID_REQUEST")
     def test_audio_channel_strategy_defaults_to_mixdown_and_accepts_split_stereo(self) -> None:
         payload = json.loads((FIXTURES / "workflow-submit.request.json").read_text(encoding="utf-8"))
         decoded = decode_request(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
@@ -121,6 +145,70 @@ class ContractV2CodecTests(unittest.TestCase):
             with self.subTest(mutation=mutation):
                 with self.assertRaises(ProtocolError):
                     decode_request(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+
+    def test_multiple_reference_documents_validate_independently_without_a_count_cap(self) -> None:
+        payload = json.loads((FIXTURES / "workflow-submit.request.json").read_text(encoding="utf-8"))
+        summary = payload["params"]["draft"]["summary"]
+        summary.pop("reference_document")
+        references = [self._reference_snapshot(f"notes {index}") for index in range(80)]
+        summary["reference_documents"] = references
+        decoded = decode_request(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        self.assertEqual(decoded["params"]["draft"]["summary"]["reference_documents"], references)
+        summary["reference_documents"] = [references[0], {**references[1], "sha256": "0" * 64}]
+        with self.assertRaises(ProtocolError):
+            decode_request(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        for invalid in (None, [None], "notes.md"):
+            summary["reference_documents"] = invalid
+            with self.subTest(invalid=invalid), self.assertRaises(ProtocolError):
+                decode_request(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        summary["reference_documents"] = []
+        summary["reference_document"] = None
+        with self.assertRaises(ProtocolError):
+            decode_request(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+
+    def test_multiple_references_can_exceed_the_old_transport_limit(self) -> None:
+        payload = json.loads((FIXTURES / "workflow-submit.request.json").read_text(encoding="utf-8"))
+        summary = payload["params"]["draft"]["summary"]
+        summary.pop("reference_document")
+        summary["reference_documents"] = [self._reference_snapshot("x" * 220_000) for _ in range(5)]
+        raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.assertGreater(len(raw), 1024 * 1024)
+        self.assertEqual(len(decode_request(raw)["params"]["draft"]["summary"]["reference_documents"]), 5)
+
+    def test_large_reference_is_preserved_for_submit_and_resummarize(self) -> None:
+        payload = json.loads((FIXTURES / "workflow-submit.request.json").read_text(encoding="utf-8"))
+        summary = payload["params"]["draft"]["summary"]
+        reference = self._reference_snapshot("参考内容" * 30_000)
+        self.assertGreater(reference["size_bytes"], 256 * 1024)
+        summary["reference_document"] = reference
+        submit = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        resummarize = {
+            **payload,
+            "method": "workflow.resummarize",
+            "params": {
+                "source_workflow_id": "wf_1",
+                "expected_attempt_id": "att_1",
+                "expected_sequence": 1,
+                "input_artifact_id": "art_1",
+                "summary": summary,
+            },
+        }
+        control = json.loads((FIXTURES / "workflow-control.request.json").read_text(encoding="utf-8"))
+        control["params"]["padding"] = "x" * 2048
+        with patch("app.ipc.v2.codec.MAX_MESSAGE_BYTES", 1024):
+            decoded_submit = decode_request(submit)
+            decoded_resummary = decode_request(json.dumps(resummarize, ensure_ascii=False).encode("utf-8"))
+            self.assertEqual(decoded_submit["params"]["draft"]["summary"]["reference_document"], reference)
+            self.assertEqual(decoded_resummary["params"]["summary"]["reference_document"], reference)
+            with self.assertRaisesRegex(ProtocolError, "Message exceeds"):
+                decode_request(json.dumps(control).encode("utf-8"))
+            control["method"] = []
+            with self.assertRaisesRegex(ProtocolError, "Message exceeds"):
+                decode_request(json.dumps(control).encode("utf-8"))
+        schema = json.loads((SCHEMAS / "summary-draft.schema.json").read_text(encoding="utf-8"))
+        reference_schema = schema["properties"]["reference_document"]["properties"]
+        self.assertNotIn("maxLength", reference_schema["content"])
+        self.assertNotIn("maximum", reference_schema["size_bytes"])
 
     def test_persistent_operation_payload_rejects_secret(self) -> None:
         payload = json.loads((FIXTURES / "workflow-control.request.json").read_text(encoding="utf-8"))

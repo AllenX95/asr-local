@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 from typing import Any, Callable, Protocol
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -352,8 +353,9 @@ class OpenAICompatibleSummaryGenerator:
                 {"role": "system", "content": _system_prompt(summary["template"]["prompt_snapshot"], summary)},
                 {"role": "user", "content": prompt},
             ],
-            "max_tokens": summary["max_output_tokens"],
         }
+        token_field = "max_completion_tokens" if _is_official_mimo_v26(summary) else "max_tokens"
+        payload[token_field] = summary["max_output_tokens"]
         try:
             text = await asyncio.to_thread(self.request_fn, _chat_completions_url(summary["base_url"]), payload, headers)
         except (urllib.error.URLError, TimeoutError) as exc:
@@ -2232,6 +2234,19 @@ def _transcript_text(transcript: dict[str, Any]) -> str:
 
 
 def _reference_text(summary: dict[str, Any]) -> str | None:
+    if "reference_documents" in summary:
+        references = summary["reference_documents"]
+        if not isinstance(references, list) or any(
+            not isinstance(item, dict) or not isinstance(item.get("name"), str) or not isinstance(item.get("content"), str)
+            for item in references
+        ):
+            raise ValueError("reference_documents snapshots are invalid")
+        if not references:
+            return None
+        return "\n\n".join(
+            f"### 参考速记 {index}（文件名：{reference['name']!r}）\n{reference['content']}"
+            for index, reference in enumerate(references, start=1)
+        )
     reference = summary.get("reference_document")
     if reference is None:
         return None
@@ -2241,6 +2256,8 @@ def _reference_text(summary: dict[str, Any]) -> str | None:
 
 
 def _reference_name(summary: dict[str, Any]) -> str | None:
+    if "reference_documents" in summary:
+        return None  # Each document is identified alongside its content.
     reference = summary.get("reference_document")
     if reference is None:
         return None
@@ -2258,7 +2275,13 @@ def _system_prompt(template: str, summary: dict[str, Any] | None = None) -> str:
         if policy == "generation_first"
         else SYSTEM_RULES
     )
-    return f"{rules}\n\n<summary_template>\n{template}\n</summary_template>"
+    references = summary.get("reference_documents") if summary is not None else None
+    multiple_references_rule = (
+        "\n多篇参考速记是独立材料；相互矛盾时保留各自口径、注明来源并标记待核实，"
+        "不要按排列顺序或文件名推断优先级。"
+        if isinstance(references, list) and len(references) > 1 else ""
+    )
+    return f"{rules}{multiple_references_rule}\n\n<summary_template>\n{template}\n</summary_template>"
 
 
 def _user_prompt(
@@ -2405,6 +2428,17 @@ def _chunk_text_for_budget(
             chunks.append(chunk)
         cursor = end
     return chunks
+
+
+def _is_official_mimo_v26(summary: dict[str, Any]) -> bool:
+    model = str(summary.get("model", "")).strip().lower()
+    if model not in {"mimo-v2.6-flash", "mimo-v2.6-pro", "mimo-v2.6-pro-ultraspeed"}:
+        return False
+    try:
+        url = urllib.parse.urlsplit(str(summary.get("base_url", "")).strip())
+        return url.scheme.lower() == "https" and url.hostname in {"api.xiaomimimo.com", "token-plan-cn.xiaomimimo.com"}
+    except ValueError:
+        return False
 
 
 def _chat_completions_url(base_url: str) -> str:

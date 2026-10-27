@@ -5,12 +5,18 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ALLOWED_COMMANDS, DESKTOP_INVOKE_CHANNEL, RUNTIME_STATUS_EVENT_CHANNEL, WORKFLOW_EVENT_CHANNEL } from './channels.js'
 import { WorkflowRuntimeClient } from './workflowRuntimeClient.js'
-import { HostServices, freezeReferenceDocumentRequest } from './hostServices.js'
+import { HostServices, freezeReferenceDocumentRequest, freezeReferenceDocumentRequests } from './hostServices.js'
 import { resolveRuntimePaths } from './runtimePaths.js'
 import { createSessionLogger } from './sessionLogger.js'
 import { buildSecretProvideParams, buildSecretRejectParams } from './credentialGrant.js'
 import { loadOutputPathGrants, saveOutputPathGrants, workflowArtifactPaths, workflowOutputRoot } from './outputPathGrants.js'
 import { canonicalizeAccessPath, isPathWithinRoots } from './pathAccess.js'
+import {
+  extractReferenceHotwords,
+  REFERENCE_HOTWORDS_MODEL,
+  ReferenceHotwordError,
+  resolveTrustedReferenceHotwordProfile,
+} from './referenceHotwords.js'
 
 const appDir = path.dirname(fileURLToPath(import.meta.url))
 const userDataDir = app.getPath('userData')
@@ -32,6 +38,7 @@ const selectedOutputRoots = new Set<string>()
 const persistentOutputRoots = new Set<string>()
 const managedArtifactPaths = new Set<string>()
 const outputPathGrantsFile = path.join(userDataDir, 'output-path-grants.json')
+let activeReferenceHotwordExtraction: { requestId: string; controller: AbortController } | null = null
 
 function grantPath(target: string): string { const resolved = canonicalizeAccessPath(target); grantedPaths.add(resolved); return resolved }
 function dialogDefaultDirectory(environmentVariable: string): string {
@@ -91,6 +98,12 @@ function requireString(args: Record<string, unknown>, key: string): string {
   return value
 }
 
+function requireHotwordRequestId(args: Record<string, unknown>): string {
+  const requestId = requireString(args, 'requestId')
+  if (!/^[A-Za-z0-9_-]{1,80}$/u.test(requestId)) throw new Error('INVALID_REQUEST: requestId is invalid')
+  return requestId
+}
+
 async function invoke(command: string, args: Record<string, unknown>): Promise<unknown> {
   switch (command) {
     case 'get_app_info': return { project_root: projectRoot, outputs_dir: outputsDir, legacy_desktop_dir: desktopDir, worker_dir: workerDir, contract_version: 'workflow-contract-v2', logs: { directory: paths.logsDir, desktop_log_path: logger.paths.main, worker_log_path: logger.paths.worker, stdio_log_path: logger.paths.main } }
@@ -104,14 +117,16 @@ async function invoke(command: string, args: Record<string, unknown>): Promise<u
     }
     case 'select_markdown_file': {
       const isReferenceOnly = args.referenceOnly === true
+      const multiple = isReferenceOnly && args.multiple === true
       const extensions = isReferenceOnly ? ['md', 'markdown'] : ['md', 'markdown', 'txt']
       const result = await dialog.showOpenDialog(mainWindow!, {
-        properties: ['openFile'],
+        properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
         ...(isReferenceOnly
           ? { defaultPath: dialogDefaultDirectory('ASR_LOCAL_REFERENCE_DEFAULT_DIR') }
           : {}),
-        filters: [{ name: 'Markdown', extensions }]
+        filters: [{ name: isReferenceOnly ? 'Markdown' : 'Markdown / 文本', extensions }]
       })
+      if (multiple) return result.canceled ? [] : result.filePaths.map(grantPath)
       return result.canceled || !result.filePaths[0] ? null : grantPath(result.filePaths[0])
     }
     case 'select_output_dir': {
@@ -143,6 +158,52 @@ async function invoke(command: string, args: Record<string, unknown>): Promise<u
     case 'load_summary_templates': return host.loadTemplates()
     case 'save_summary_template': return host.saveTemplate(requireString(args, 'name'), requireString(args, 'prompt'))
     case 'delete_summary_template': return host.deleteTemplate(requireString(args, 'name'))
+    case 'cancel_reference_hotwords': {
+      const requestId = requireHotwordRequestId(args)
+      if (!activeReferenceHotwordExtraction || activeReferenceHotwordExtraction.requestId !== requestId) {
+        return { cancelled: false }
+      }
+      activeReferenceHotwordExtraction.controller.abort()
+      return { cancelled: true }
+    }
+    case 'extract_reference_hotwords': {
+      const requestId = requireHotwordRequestId(args)
+      if (activeReferenceHotwordExtraction) throw new ReferenceHotwordError('busy')
+      const controller = new AbortController()
+      const activeCall = { requestId, controller }
+      activeReferenceHotwordExtraction = activeCall
+      try {
+        const reference = await freezeReferenceDocumentRequest(
+          { path: requireString(args, 'referencePath') },
+          assertGrantedPath,
+          { allowTextFiles: true },
+        )
+        if (!reference) throw new Error('REFERENCE_HOTWORD_REFERENCE_INVALID')
+        const profileId = requireString(args, 'profileId')
+        const profiles = await host.loadProfiles('summary')
+        const trustedProfile = resolveTrustedReferenceHotwordProfile(
+          profiles.profiles,
+          profileId,
+          args.profileVersion,
+        )
+        let apiKey: string
+        try {
+          apiKey = await host.secretForProfile('summary', trustedProfile.id, trustedProfile.version, {
+            model: REFERENCE_HOTWORDS_MODEL, baseUrl: trustedProfile.baseUrl,
+          })
+        } catch {
+          throw new ReferenceHotwordError('credential_unavailable')
+        }
+        return await extractReferenceHotwords({
+          baseUrl: trustedProfile.baseUrl,
+          apiKey,
+          document: reference,
+          signal: controller.signal,
+        })
+      } finally {
+        if (activeReferenceHotwordExtraction === activeCall) activeReferenceHotwordExtraction = null
+      }
+    }
     case 'list_history_items': return host.history(args.limit)
     case 'worker_health_check': return runtime.request('runtime.capabilities', {})
     case 'workflow_v2_capabilities': return runtime.request('runtime.capabilities', {})
@@ -155,6 +216,9 @@ async function invoke(command: string, args: Record<string, unknown>): Promise<u
       if (draft.summary && Object.prototype.hasOwnProperty.call(draft.summary, 'reference_document')) {
         draft.summary.reference_document = await freezeReferenceDocumentRequest(draft.summary.reference_document, assertGrantedPath)
       }
+      if (draft.summary && Object.prototype.hasOwnProperty.call(draft.summary, 'reference_documents')) {
+        draft.summary.reference_documents = await freezeReferenceDocumentRequests(draft.summary.reference_documents, assertGrantedPath)
+      }
       const result = await runtime.request('workflow.submit', { draft: await host.trustedWorkflowDraft(draft) }, requireString(args, 'operationId'))
       return retainWorkflowResult(result)
     }
@@ -162,6 +226,9 @@ async function invoke(command: string, args: Record<string, unknown>): Promise<u
       const requestedSummary = structuredClone(args.summary as Record<string, any>)
       if (Object.prototype.hasOwnProperty.call(requestedSummary, 'reference_document')) {
         requestedSummary.reference_document = await freezeReferenceDocumentRequest(requestedSummary.reference_document, assertGrantedPath)
+      }
+      if (Object.prototype.hasOwnProperty.call(requestedSummary, 'reference_documents')) {
+        requestedSummary.reference_documents = await freezeReferenceDocumentRequests(requestedSummary.reference_documents, assertGrantedPath)
       }
       const summary = await host.trustedSummaryRecipe(requestedSummary)
       const result = await runtime.request('workflow.resummarize', {
@@ -216,6 +283,11 @@ async function createWindow(): Promise<void> {
   mainWindow = new BrowserWindow({
     width: 1360, height: 900, minWidth: 1100, minHeight: 720, show: false,
     webPreferences: { preload: path.join(appDir, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
+  })
+  mainWindow.on('closed', () => {
+    activeReferenceHotwordExtraction?.controller.abort()
+    activeReferenceHotwordExtraction = null
+    mainWindow = null
   })
   const resetRendererZoom = () => mainWindow?.webContents.setZoomFactor(1)
   mainWindow.webContents.on('did-finish-load', resetRendererZoom)

@@ -9,6 +9,8 @@ import type {
   SummaryProfilesState,
   SummaryTemplate,
   WorkflowCatalogs,
+  ExtractReferenceHotwordsRequest,
+  ReferenceHotwordExtractionResult,
   TextFile
 } from './workerTypes';
 import { electronBridge } from './desktopBridge';
@@ -41,6 +43,7 @@ export const api = {
   selectAudioFile: () => invokeDesktop<string | null>('select_audio_file', undefined, () => null),
   selectMarkdownFile: () => invokeDesktop<string | null>('select_markdown_file', undefined, () => null),
   selectReferenceMarkdownFile: () => invokeDesktop<string | null>('select_markdown_file', { referenceOnly: true }, () => null),
+  selectReferenceMarkdownFiles: () => invokeDesktop<string[]>('select_markdown_file', { referenceOnly: true, multiple: true }, () => []),
   selectOutputDir: () => invokeDesktop<string | null>('select_output_dir', undefined, () => null),
   readTextFile: (path: string) => invokeDesktop<TextFile>('read_text_file', { path }),
   saveTextFile: (path: string, content: string) =>
@@ -95,6 +98,10 @@ export const api = {
     invokeDesktop<SummaryProfilesState>('delete_summary_profile', { name }),
   loadSummaryTemplates: () => invokeDesktop<SummaryTemplate[]>('load_summary_templates', undefined, () => []),
   loadWorkflowCatalogs: () => invokeDesktop<WorkflowCatalogs>('workflow_v2_catalogs', undefined, () => ({ summary_profiles: [], summary_templates: [] })),
+  extractReferenceHotwords: (request: ExtractReferenceHotwordsRequest) =>
+    invokeDesktop<ReferenceHotwordExtractionResult>('extract_reference_hotwords', { ...request }),
+  cancelReferenceHotwords: (requestId: string) =>
+    invokeDesktop<{ cancelled: boolean }>('cancel_reference_hotwords', { requestId }),
   saveSummaryTemplate: (name: string, prompt: string) =>
     invokeDesktop<SummaryTemplate[]>('save_summary_template', { name, prompt }),
   deleteSummaryTemplate: (name: string) =>

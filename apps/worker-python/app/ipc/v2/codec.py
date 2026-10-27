@@ -8,8 +8,9 @@ from typing import Any
 from .canonical import normalize_json
 from .errors import ProtocolError
 
-MAX_MESSAGE_BYTES = 1024 * 1024
-MAX_REFERENCE_DOCUMENT_BYTES = 256 * 1024
+# Other commands remain bounded; submit/resummarize can contain complete,
+# host-authorized reference snapshots of arbitrary size.
+MAX_MESSAGE_BYTES = 32 * 1024 * 1024
 SUMMARY_POLICY_ID = "asr-reference-mutual-check"
 SUMMARY_POLICY_VERSION = 1
 SUPPORTED_SUMMARY_POLICIES = {
@@ -168,8 +169,8 @@ def _validate_draft_shape(draft: dict[str, Any]) -> None:
     _require_keys(prompt, {"recording_background", "hotwords", "extra_instruction"}, "prompt_input")
     if not isinstance(prompt["recording_background"], str) or len(prompt["recording_background"]) > 4000:
         raise _error("recording_background is invalid.", "prompt_input.recording_background")
-    if not isinstance(prompt["hotwords"], list) or len(prompt["hotwords"]) > 200:
-        raise _error("hotwords must contain at most 200 items.", "prompt_input.hotwords")
+    if not isinstance(prompt["hotwords"], list):
+        raise _error("hotwords must be a list.", "prompt_input.hotwords")
     if not isinstance(prompt["extra_instruction"], str) or len(prompt["extra_instruction"]) > 1000:
         raise _error("extra_instruction is invalid.", "prompt_input.extra_instruction")
 
@@ -212,7 +213,7 @@ def _validate_provider(provider: Any, field: str) -> None:
     required = {"profile_id", "profile_version", "base_url", "auth_mode", "model", "credential_ref", "provider_binding_sha256"}
     allowed = set(required)
     if field == "summary":
-        allowed |= {"model_source", "template", "context_strategy", "input_token_budget", "max_output_tokens", "reference_document", "policy_snapshot"}
+        allowed |= {"model_source", "template", "context_strategy", "input_token_budget", "max_output_tokens", "reference_document", "reference_documents", "policy_snapshot"}
     _reject_unknown(provider, allowed, field)
     required_fields = required if field != "summary" else required | {"model_source", "template", "context_strategy", "input_token_budget", "max_output_tokens", "policy_snapshot"}
     _require_keys(provider, required_fields, field)
@@ -244,8 +245,16 @@ def _validate_provider(provider: Any, field: str) -> None:
         for name in ("input_token_budget", "max_output_tokens"):
             if not isinstance(provider[name], int) or provider[name] < 1:
                 raise _error(f"{name} must be a positive integer.", f"summary.{name}")
+        if "reference_document" in provider and "reference_documents" in provider:
+            raise _error("Provide reference_document or reference_documents, not both.", "summary.reference_documents")
         if "reference_document" in provider and provider["reference_document"] is not None:
             _validate_reference_document(provider["reference_document"], "summary.reference_document")
+        if "reference_documents" in provider:
+            references = provider["reference_documents"]
+            if not isinstance(references, list):
+                raise _error("reference_documents must be a list.", "summary.reference_documents")
+            for index, reference in enumerate(references):
+                _validate_reference_document(reference, f"summary.reference_documents[{index}]")
         _validate_summary_policy_snapshot(provider["policy_snapshot"], "summary.policy_snapshot")
 
 
@@ -273,10 +282,8 @@ def _validate_reference_document(value: Any, field: str) -> None:
     if len(name) > 255 or "/" in name or "\\" in name or not name.lower().endswith((".md", ".markdown")):
         raise _error(f"{field}.name must be a Markdown filename.", f"{field}.name")
     content = _string(value["content"], f"{field}.content", allow_empty=False)
-    if len(content.encode("utf-8")) > MAX_REFERENCE_DOCUMENT_BYTES:
-        raise _error(f"{field}.content exceeds the {MAX_REFERENCE_DOCUMENT_BYTES}-byte limit.", f"{field}.content")
     size_bytes = value["size_bytes"]
-    if not isinstance(size_bytes, int) or isinstance(size_bytes, bool) or size_bytes < 1 or size_bytes > MAX_REFERENCE_DOCUMENT_BYTES:
+    if not isinstance(size_bytes, int) or isinstance(size_bytes, bool) or size_bytes < 1:
         raise _error(f"{field}.size_bytes is invalid.", f"{field}.size_bytes")
     actual_size = len(content.encode("utf-8"))
     if size_bytes != actual_size:
@@ -487,13 +494,18 @@ def _validate_secret_reject_params(params: dict[str, Any]) -> None:
 
 def decode_request(line: bytes | str) -> dict[str, Any]:
     raw = line.encode("utf-8") if isinstance(line, str) else line
-    if len(raw) > MAX_MESSAGE_BYTES:
-        raise ProtocolError("INVALID_REQUEST", "Message exceeds the 1 MiB limit.", [], {})
     try:
         text = raw.decode("utf-8", errors="strict")
         value = json.loads(text)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ProtocolError("INVALID_REQUEST", f"Invalid UTF-8 JSON message: {exc}.", [], {}) from exc
+    if len(raw) > MAX_MESSAGE_BYTES and not (
+        isinstance(value, dict)
+        and value.get("kind") == "request"
+        and isinstance(value.get("method"), str)
+        and value.get("method") in {"workflow.submit", "workflow.resummarize"}
+    ):
+        raise ProtocolError("INVALID_REQUEST", "Message exceeds the 32 MiB limit.", [], {})
     return validate_envelope(value)
 
 
