@@ -130,7 +130,7 @@ describe('extractReferenceHotwords', () => {
       .mockImplementationOnce(async () => providerResponse('{"terms":["Qwen3-ASR"]}'))
       .mockImplementationOnce(async () => new Response('', { status: 400 })) as unknown as typeof fetch
     await expect(input(fetchImpl, { document: { ...document, content } }))
-      .rejects.toMatchObject<Partial<ReferenceHotwordError>>({ code: 'http_400' })
+      .rejects.toMatchObject<Partial<ReferenceHotwordError>>({ code: 'http_400', diagnostics: { chunk_index: 2, http_status: 400 } })
     expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
 
@@ -186,6 +186,23 @@ describe('extractReferenceHotwords', () => {
     await expect(input(fetchImpl)).rejects.toMatchObject<Partial<ReferenceHotwordError>>({ code: 'model_mismatch' })
   })
 
+  it('retains safe diagnostic details for malformed responses and network errors', async () => {
+    const truncated = vi.fn(async () => providerResponse('{"terms":[]}', { finishReason: 'length' })) as unknown as typeof fetch
+    await expect(input(truncated)).rejects.toMatchObject({
+      code: 'invalid_response', diagnostics: { chunk_index: 1, response_issue: 'finish_reason_length' },
+    })
+
+    const network = vi.fn(async () => { throw new TypeError('private network detail', { cause: { code: 'ENOTFOUND', hostname: 'private-host' } }) }) as unknown as typeof fetch
+    await expect(input(network)).rejects.toMatchObject({
+      code: 'network_error', diagnostics: { chunk_index: 1, network_code: 'ENOTFOUND' },
+    })
+
+    const serverError = vi.fn(async () => new Response('private provider body', { status: 503 })) as unknown as typeof fetch
+    await expect(input(serverError)).rejects.toMatchObject({
+      code: 'provider_error', diagnostics: { chunk_index: 1, http_status: 503 },
+    })
+  })
+
   it('maps HTTP failures without exposing provider bodies or credentials', async () => {
     const providerBody = 'provider-private-detail never-return-this-key'
     const fetchImpl = vi.fn(async () => new Response(providerBody, { status: 400 })) as unknown as typeof fetch
@@ -215,6 +232,6 @@ describe('extractReferenceHotwords', () => {
     await expect(pending).rejects.toMatchObject<Partial<ReferenceHotwordError>>({ code: 'cancelled' })
 
     await expect(input(waitForAbort, { timeoutMs: 1 }))
-      .rejects.toMatchObject<Partial<ReferenceHotwordError>>({ code: 'timeout' })
+      .rejects.toMatchObject<Partial<ReferenceHotwordError>>({ code: 'timeout', diagnostics: { chunk_index: 1, timeout_ms: 1 } })
   })
 })
