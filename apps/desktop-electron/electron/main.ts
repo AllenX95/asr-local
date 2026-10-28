@@ -11,6 +11,7 @@ import { createSessionLogger } from './sessionLogger.js'
 import { buildSecretProvideParams, buildSecretRejectParams } from './credentialGrant.js'
 import { loadOutputPathGrants, saveOutputPathGrants, workflowArtifactPaths, workflowOutputRoot } from './outputPathGrants.js'
 import { canonicalizeAccessPath, isPathWithinRoots } from './pathAccess.js'
+import { withReferenceHotwordFailureLogging, type ReferenceHotwordFailureContext } from './referenceHotwordDiagnostics.js'
 import {
   extractReferenceHotwords,
   REFERENCE_HOTWORDS_MODEL,
@@ -167,41 +168,53 @@ async function invoke(command: string, args: Record<string, unknown>): Promise<u
       return { cancelled: true }
     }
     case 'extract_reference_hotwords': {
-      const requestId = requireHotwordRequestId(args)
-      if (activeReferenceHotwordExtraction) throw new ReferenceHotwordError('busy')
-      const controller = new AbortController()
-      const activeCall = { requestId, controller }
-      activeReferenceHotwordExtraction = activeCall
+      const diagnostic: ReferenceHotwordFailureContext = {
+        stage: 'validation', startedAt: Date.now(), referencePath: args.referencePath, profileVersion: args.profileVersion,
+      }
+      let activeCall: { requestId: string; controller: AbortController } | null = null
       try {
-        const reference = await freezeReferenceDocumentRequest(
-          { path: requireString(args, 'referencePath') },
-          assertGrantedPath,
-          { allowTextFiles: true },
-        )
-        if (!reference) throw new Error('REFERENCE_HOTWORD_REFERENCE_INVALID')
-        const profileId = requireString(args, 'profileId')
-        const profiles = await host.loadProfiles('summary')
-        const trustedProfile = resolveTrustedReferenceHotwordProfile(
-          profiles.profiles,
-          profileId,
-          args.profileVersion,
-        )
-        let apiKey: string
-        try {
-          apiKey = await host.secretForProfile('summary', trustedProfile.id, trustedProfile.version, {
-            model: REFERENCE_HOTWORDS_MODEL, baseUrl: trustedProfile.baseUrl,
+        return await withReferenceHotwordFailureLogging(logger, diagnostic, async () => {
+          const requestId = requireHotwordRequestId(args)
+          diagnostic.requestId = requestId
+          if (activeReferenceHotwordExtraction) throw new ReferenceHotwordError('busy')
+          const controller = new AbortController()
+          activeCall = { requestId, controller }
+          activeReferenceHotwordExtraction = activeCall
+          diagnostic.stage = 'document'
+          const reference = await freezeReferenceDocumentRequest(
+            { path: requireString(args, 'referencePath') },
+            assertGrantedPath,
+            { allowTextFiles: true },
+          )
+          if (!reference) throw new ReferenceHotwordError('reference_invalid')
+          diagnostic.referenceSizeBytes = reference.size_bytes
+          diagnostic.stage = 'profile'
+          const profileId = requireString(args, 'profileId')
+          const profiles = await host.loadProfiles('summary')
+          const trustedProfile = resolveTrustedReferenceHotwordProfile(
+            profiles.profiles,
+            profileId,
+            args.profileVersion,
+          )
+          let apiKey: string
+          diagnostic.stage = 'credential'
+          try {
+            apiKey = await host.secretForProfile('summary', trustedProfile.id, trustedProfile.version, {
+              model: REFERENCE_HOTWORDS_MODEL, baseUrl: trustedProfile.baseUrl,
+            })
+          } catch {
+            throw new ReferenceHotwordError('credential_unavailable')
+          }
+          diagnostic.stage = 'provider'
+          return await extractReferenceHotwords({
+            baseUrl: trustedProfile.baseUrl,
+            apiKey,
+            document: reference,
+            signal: controller.signal,
           })
-        } catch {
-          throw new ReferenceHotwordError('credential_unavailable')
-        }
-        return await extractReferenceHotwords({
-          baseUrl: trustedProfile.baseUrl,
-          apiKey,
-          document: reference,
-          signal: controller.signal,
         })
       } finally {
-        if (activeReferenceHotwordExtraction === activeCall) activeReferenceHotwordExtraction = null
+        if (activeCall && activeReferenceHotwordExtraction === activeCall) activeReferenceHotwordExtraction = null
       }
     }
     case 'list_history_items': return host.history(args.limit)

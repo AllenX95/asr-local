@@ -33,27 +33,36 @@ export interface ReferenceHotwordExtraction {
   elapsed_ms: number
 }
 
-export type ReferenceHotwordErrorCode =
-  | 'invalid_endpoint'
-  | 'profile_not_found'
-  | 'profile_ambiguous'
-  | 'profile_model_mismatch'
-  | 'credential_missing'
-  | 'credential_unavailable'
-  | 'busy'
-  | 'cancelled'
-  | 'timeout'
-  | 'network_error'
-  | 'http_400'
-  | 'unauthorized'
-  | 'rate_limited'
-  | 'provider_error'
-  | 'response_too_large'
-  | 'invalid_response'
-  | 'model_mismatch'
+export const REFERENCE_HOTWORD_ERROR_CODES = [
+  'reference_invalid', 'invalid_endpoint', 'profile_not_found', 'profile_ambiguous', 'profile_model_mismatch',
+  'credential_missing', 'credential_unavailable', 'busy', 'cancelled', 'timeout', 'network_error',
+  'http_400', 'unauthorized', 'rate_limited', 'provider_error', 'response_too_large',
+  'invalid_response', 'model_mismatch',
+] as const
+export type ReferenceHotwordErrorCode = typeof REFERENCE_HOTWORD_ERROR_CODES[number]
+
+export const REFERENCE_HOTWORD_RESPONSE_ISSUES = [
+  'invalid_utf8', 'invalid_response_json', 'response_not_object', 'invalid_choices',
+  'invalid_choice', 'finish_reason_length', 'finish_reason_content_filter', 'finish_reason_other',
+  'invalid_message', 'missing_content', 'invalid_content_json', 'invalid_terms',
+] as const
+
+export const REFERENCE_HOTWORD_NETWORK_CODES = [
+  'ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EHOSTUNREACH',
+  'ENETUNREACH', 'CERT_HAS_EXPIRED', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'SELF_SIGNED_CERT_IN_CHAIN',
+  'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT',
+] as const
+
+export interface ReferenceHotwordDiagnostics {
+  chunk_index?: number
+  http_status?: number
+  timeout_ms?: number
+  response_issue?: typeof REFERENCE_HOTWORD_RESPONSE_ISSUES[number]
+  network_code?: typeof REFERENCE_HOTWORD_NETWORK_CODES[number]
+}
 
 export class ReferenceHotwordError extends Error {
-  constructor(readonly code: ReferenceHotwordErrorCode) {
+  constructor(readonly code: ReferenceHotwordErrorCode, readonly diagnostics: ReferenceHotwordDiagnostics = {}) {
     super('REFERENCE_HOTWORD_' + code.toUpperCase())
     this.name = 'ReferenceHotwordError'
   }
@@ -182,17 +191,17 @@ async function readResponseText(response: Response): Promise<string> {
   try {
     return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
   } catch {
-    throw new ReferenceHotwordError('invalid_response')
+    throw new ReferenceHotwordError('invalid_response', { response_issue: 'invalid_utf8' })
   }
 }
 
 function normalizeTerms(value: unknown, source: string): { terms: string[]; rejectedCount: number } {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new ReferenceHotwordError('invalid_response')
+    throw new ReferenceHotwordError('invalid_response', { response_issue: 'invalid_terms' })
   }
   const result = value as Record<string, unknown>
   if (Object.keys(result).length !== 1 || !Object.prototype.hasOwnProperty.call(result, 'terms') || !Array.isArray(result.terms)) {
-    throw new ReferenceHotwordError('invalid_response')
+    throw new ReferenceHotwordError('invalid_response', { response_issue: 'invalid_terms' })
   }
   const terms: string[] = []
   const seen = new Set<string>()
@@ -226,10 +235,28 @@ function normalizeTerms(value: unknown, source: string): { terms: string[]; reje
 }
 
 function providerError(response: Response): ReferenceHotwordError {
-  if (response.status === 400) return new ReferenceHotwordError('http_400')
-  if (response.status === 401 || response.status === 403) return new ReferenceHotwordError('unauthorized')
-  if (response.status === 429) return new ReferenceHotwordError('rate_limited')
-  return new ReferenceHotwordError('provider_error')
+  const diagnostics = { http_status: response.status }
+  if (response.status === 400) return new ReferenceHotwordError('http_400', diagnostics)
+  if (response.status === 401 || response.status === 403) return new ReferenceHotwordError('unauthorized', diagnostics)
+  if (response.status === 429) return new ReferenceHotwordError('rate_limited', diagnostics)
+  return new ReferenceHotwordError('provider_error', diagnostics)
+}
+
+function safeNetworkErrorCode(error: unknown): ReferenceHotwordDiagnostics['network_code'] {
+  const queue: unknown[] = [error]
+  const seen = new Set<object>()
+  while (queue.length && seen.size < 10) {
+    const item = queue.shift()
+    if (!item || typeof item !== 'object' || seen.has(item)) continue
+    seen.add(item)
+    const details = item as { code?: unknown; cause?: unknown; errors?: unknown }
+    if (typeof details.code === 'string' && (REFERENCE_HOTWORD_NETWORK_CODES as readonly string[]).includes(details.code)) {
+      return details.code as ReferenceHotwordDiagnostics['network_code']
+    }
+    if (details.cause) queue.push(details.cause)
+    if (Array.isArray(details.errors)) queue.push(...details.errors.slice(0, 10))
+  }
+  return undefined
 }
 
 function* referenceTextChunks(source: string): Generator<string> {
@@ -308,33 +335,37 @@ export async function extractReferenceHotwords(
         try {
           parsed = JSON.parse(responseText)
         } catch {
-          throw new ReferenceHotwordError('invalid_response')
+          throw new ReferenceHotwordError('invalid_response', { response_issue: 'invalid_response_json' })
         }
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-          throw new ReferenceHotwordError('invalid_response')
+          throw new ReferenceHotwordError('invalid_response', { response_issue: 'response_not_object' })
         }
         const body = parsed as Record<string, unknown>
         if (body.model !== REFERENCE_HOTWORDS_MODEL) throw new ReferenceHotwordError('model_mismatch')
         if (!Array.isArray(body.choices) || body.choices.length !== 1) {
-          throw new ReferenceHotwordError('invalid_response')
+          throw new ReferenceHotwordError('invalid_response', { response_issue: 'invalid_choices' })
         }
         const choice = body.choices[0]
         if (!choice || typeof choice !== 'object' || Array.isArray(choice)) {
-          throw new ReferenceHotwordError('invalid_response')
+          throw new ReferenceHotwordError('invalid_response', { response_issue: 'invalid_choice' })
         }
         const choiceRecord = choice as Record<string, unknown>
-        if (choiceRecord.finish_reason !== 'stop') throw new ReferenceHotwordError('invalid_response')
+        if (choiceRecord.finish_reason !== 'stop') {
+          const responseIssue = choiceRecord.finish_reason === 'length' ? 'finish_reason_length'
+            : choiceRecord.finish_reason === 'content_filter' ? 'finish_reason_content_filter' : 'finish_reason_other'
+          throw new ReferenceHotwordError('invalid_response', { response_issue: responseIssue })
+        }
         const message = choiceRecord.message
         if (!message || typeof message !== 'object' || Array.isArray(message)) {
-          throw new ReferenceHotwordError('invalid_response')
+          throw new ReferenceHotwordError('invalid_response', { response_issue: 'invalid_message' })
         }
         const content = (message as Record<string, unknown>).content
-        if (typeof content !== 'string') throw new ReferenceHotwordError('invalid_response')
+        if (typeof content !== 'string') throw new ReferenceHotwordError('invalid_response', { response_issue: 'missing_content' })
         let output: unknown
         try {
           output = JSON.parse(content)
         } catch {
-          throw new ReferenceHotwordError('invalid_response')
+          throw new ReferenceHotwordError('invalid_response', { response_issue: 'invalid_content_json' })
         }
         const normalized = normalizeTerms(output, chunk)
         rejectedCount += normalized.rejectedCount
@@ -360,10 +391,11 @@ export async function extractReferenceHotwords(
         }
         chunkCount += 1
       } catch (error) {
-        if (error instanceof ReferenceHotwordError) throw error
-        if (timedOut) throw new ReferenceHotwordError('timeout')
-        if (input.signal?.aborted) throw new ReferenceHotwordError('cancelled')
-        throw new ReferenceHotwordError('network_error')
+        const chunk_index = chunkCount + 1
+        if (error instanceof ReferenceHotwordError) throw new ReferenceHotwordError(error.code, { ...error.diagnostics, chunk_index })
+        if (timedOut) throw new ReferenceHotwordError('timeout', { chunk_index, timeout_ms: timeoutMs })
+        if (input.signal?.aborted) throw new ReferenceHotwordError('cancelled', { chunk_index })
+        throw new ReferenceHotwordError('network_error', { chunk_index, network_code: safeNetworkErrorCode(error) })
       } finally {
         clearTimeout(timer)
       }

@@ -62,8 +62,8 @@ export async function readReferenceDocumentSnapshot(filePath: string, options: {
   let info
   try {
     info = await lstat(resolved)
-  } catch {
-    throw new Error(`REFERENCE_DOCUMENT_UNREADABLE: file does not exist: ${resolved}`)
+  } catch (error) {
+    throw new Error(`REFERENCE_DOCUMENT_UNREADABLE: file does not exist: ${resolved}`, { cause: error })
   }
   if (!info.isFile()) {
     throw new Error('REFERENCE_DOCUMENT_INVALID: selected reference must be a regular file')
@@ -71,8 +71,8 @@ export async function readReferenceDocumentSnapshot(filePath: string, options: {
   let bytes: Buffer
   try {
     bytes = await readFile(resolved)
-  } catch {
-    throw new Error(`REFERENCE_DOCUMENT_UNREADABLE: cannot read file: ${resolved}`)
+  } catch (error) {
+    throw new Error(`REFERENCE_DOCUMENT_UNREADABLE: cannot read file: ${resolved}`, { cause: error })
   }
   if (bytes.byteLength < 1) {
     throw new Error('REFERENCE_DOCUMENT_INVALID: reference document is empty')
