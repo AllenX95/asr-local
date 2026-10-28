@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { ChevronDown, ChevronRight, Clock3, FolderOpen, Pause, Play, RefreshCw, RotateCcw, Square, Trash2 } from '@lucide/vue';
 import { api } from '../../ipc/desktopClient';
-import type { PipelineProfile, ReferenceHotwordExtractionResult, WorkflowCatalogs, WorkflowSummaryProfile, WorkflowSummaryTemplate } from '../../ipc/workerTypes';
+import type { PipelineProfile, WorkflowCatalogs, WorkflowSummaryProfile, WorkflowSummaryTemplate } from '../../ipc/workerTypes';
 import { useAppStore } from '../../stores/appStore';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { taskControlActions } from '../../workflows/taskControls';
@@ -19,6 +19,8 @@ import {
   parseHotwordInput,
   preferredReferenceHotwordProfileId,
   REFERENCE_HOTWORDS_MODEL,
+  runReferenceHotwordBatch,
+  type ReferenceHotwordBatchFailure,
   type ReferenceHotwordRequestIdentity,
 } from './referenceHotwords';
 import { buildWorkflowDraft } from './workflowDraft';
@@ -37,8 +39,8 @@ const pipelineProfile = ref<Exclude<PipelineProfile, 'cloud_asr'>>('pyannote_qwe
 const selectedProfileName = ref('');
 const selectedTemplateName = ref('');
 const referenceMarkdownPaths = ref<string[]>([]);
-const hotwordSourcePath = ref('');
-const additionalHotwordPaths = ref<string[]>([]);
+const hotwordSourcePaths = ref<string[]>([]);
+const hotwordReferenceToAdd = ref('');
 const referenceHotwordProfileId = ref('');
 const privacyConfirmed = ref(false);
 const error = ref('');
@@ -60,10 +62,12 @@ const resummaryPrivacyConfirmed = ref(false);
 const resummarizing = ref(false);
 const referenceHotwordError = ref('');
 const referenceHotwordNotice = ref('');
-const busyReferenceHotwordRequestId = ref<string | null>(null);
-const cancellingReferenceHotwordRequestId = ref<string | null>(null);
+const referenceHotwordsBusy = ref(false);
+const referenceHotwordCancelRequested = ref(false);
+const referenceHotwordProgress = ref<{ index: number; total: number; path: string } | null>(null);
+const referenceHotwordFailures = ref<ReferenceHotwordBatchFailure[]>([]);
 const activeReferenceHotwordRequest = ref<ReferenceHotwordRequestIdentity | null>(null);
-const referenceHotwordsBusy = computed(() => busyReferenceHotwordRequestId.value !== null);
+let viewUnmounted = false;
 const manualHotwordCount = computed(() => parseHotwordInput(hotwordsText.value).length);
 const pyannoteReady = computed(() => appStore.settings.models?.pyannote_exists ?? false);
 const qwenReady = computed(() => appStore.settings.models?.qwen_exists ?? false);
@@ -100,9 +104,9 @@ const referenceHotwordProfiles = computed(() => matchingReferenceHotwordProfiles
 const selectedReferenceHotwordProfile = computed(() =>
   referenceHotwordProfiles.value.find((profile) => profile.id === referenceHotwordProfileId.value) ?? null,
 );
-const hotwordSourceOptions = computed(() => [...new Set([...referenceMarkdownPaths.value, ...additionalHotwordPaths.value])]);
+const availableHotwordReferences = computed(() => referenceMarkdownPaths.value.filter((path) => !hotwordSourcePaths.value.includes(path)));
 const referenceHotwordAuthorizationText = computed(() => {
-  if (!hotwordSourcePath.value.trim()) return '请选择用于提取热词的文本文件。';
+  if (!hotwordSourcePaths.value.length) return '请选择用于提取热词的文本文件。';
   const profile = selectedReferenceHotwordProfile.value;
   if (!profile) {
     return `请在设置中添加模型为 ${REFERENCE_HOTWORDS_MODEL} 的总结 Profile 并配置 API Key。`;
@@ -110,7 +114,7 @@ const referenceHotwordAuthorizationText = computed(() => {
   if (profile.auth_mode !== 'bearer') {
     return `所选 Profile 尚未配置 API Key。请在设置中为 ${REFERENCE_HOTWORDS_MODEL} Profile 填写并保存密钥。`;
   }
-  return `将所选文本文件发送到 ${profile.base_url}，使用模型 ${REFERENCE_HOTWORDS_MODEL} 提取热词。`;
+  return `将所选的 ${hotwordSourcePaths.value.length} 个文本文件依次发送到 ${profile.base_url}，使用模型 ${REFERENCE_HOTWORDS_MODEL} 提取热词。`;
 });
 const selectedTemplate = computed(() =>
   availableTemplates.value.find((template) => template.name === selectedTemplateName.value) ?? null,
@@ -142,9 +146,10 @@ watch(selectedProfileName, () => {
 watch(referenceMarkdownPaths, () => {
   privacyConfirmed.value = false;
 });
-watch(hotwordSourcePath, () => {
+watch(hotwordSourcePaths, () => {
   referenceHotwordError.value = '';
   referenceHotwordNotice.value = '';
+  referenceHotwordFailures.value = [];
   cancelActiveReferenceHotwordRequest();
 });
 watch(() => {
@@ -153,6 +158,7 @@ watch(() => {
 }, () => {
   referenceHotwordError.value = '';
   referenceHotwordNotice.value = '';
+  referenceHotwordFailures.value = [];
   cancelActiveReferenceHotwordRequest();
 });
 watch(resummaryProfileName, () => {
@@ -191,32 +197,25 @@ watch(
   { immediate: true },
 );
 
-function isCurrentReferenceHotwordRequest(identity: ReferenceHotwordRequestIdentity): boolean {
-  return isSameReferenceHotwordRequest(identity, activeReferenceHotwordRequest.value)
-    && identity.referencePath === hotwordSourcePath.value.trim()
-    && identity.profileId === selectedReferenceHotwordProfile.value?.id
-    && identity.profileVersion === selectedReferenceHotwordProfile.value?.version;
-}
-
 function cancelActiveReferenceHotwordRequest(): void {
+  if (!referenceHotwordsBusy.value || referenceHotwordCancelRequested.value) return;
+  referenceHotwordCancelRequested.value = true;
   const request = activeReferenceHotwordRequest.value;
   if (!request) return;
-  activeReferenceHotwordRequest.value = null;
-  cancellingReferenceHotwordRequestId.value = request.requestId;
   void api.cancelReferenceHotwords(request.requestId).catch(() => undefined);
 }
 
 function cancelReferenceHotwordExtraction(): void {
-  if (!activeReferenceHotwordRequest.value) return;
+  if (!referenceHotwordsBusy.value) return;
   referenceHotwordError.value = '';
-  referenceHotwordNotice.value = '已请求取消提取，现有热词未变。';
+  referenceHotwordNotice.value = '已请求取消提取，已完成的热词会保留。';
   cancelActiveReferenceHotwordRequest();
 }
 
 async function extractReferenceHotwords(): Promise<void> {
-  const referencePath = hotwordSourcePath.value.trim();
+  const paths = [...hotwordSourcePaths.value];
   const profile = selectedReferenceHotwordProfile.value;
-  if (!referencePath) {
+  if (!paths.length) {
     referenceHotwordError.value = '请先选择用于提取热词的文本文件。';
     return;
   }
@@ -232,35 +231,53 @@ async function extractReferenceHotwords(): Promise<void> {
 
   referenceHotwordError.value = '';
   referenceHotwordNotice.value = '';
-  const identity: ReferenceHotwordRequestIdentity = {
-    requestId: crypto.randomUUID(),
-    referencePath,
-    profileId: profile.id,
-    profileVersion: profile.version,
-  };
-  activeReferenceHotwordRequest.value = identity;
-  busyReferenceHotwordRequestId.value = identity.requestId;
+  referenceHotwordFailures.value = [];
+  referenceHotwordCancelRequested.value = false;
+  referenceHotwordsBusy.value = true;
+  let addedCount = 0;
+  let rejectedCount = 0;
   try {
-    const result: ReferenceHotwordExtractionResult = await api.extractReferenceHotwords({
-      requestId: identity.requestId,
-      referencePath: identity.referencePath,
-      profileId: identity.profileId,
-      profileVersion: identity.profileVersion,
+    const batch = await runReferenceHotwordBatch({
+      paths,
+      profileId: profile.id,
+      profileVersion: profile.version,
+      createRequestId: () => crypto.randomUUID(),
+      extract: api.extractReferenceHotwords,
+      shouldContinue: () => !viewUnmounted && !referenceHotwordCancelRequested.value
+        && selectedReferenceHotwordProfile.value?.id === profile.id
+        && selectedReferenceHotwordProfile.value?.version === profile.version,
+      onStart: (request, index, total) => {
+        activeReferenceHotwordRequest.value = request;
+        referenceHotwordProgress.value = { index: index + 1, total, path: request.referencePath };
+      },
+      onFinish: (request) => {
+        if (isSameReferenceHotwordRequest(request, activeReferenceHotwordRequest.value)) activeReferenceHotwordRequest.value = null;
+      },
+      onSuccess: (result) => {
+        const merged = mergeReferenceHotwords(hotwordsText.value, result.terms);
+        hotwordsText.value = merged.text;
+        addedCount += merged.added_count;
+        rejectedCount += result.rejected_count + result.terms.length - merged.added_count;
+      },
     });
-    if (!isCurrentReferenceHotwordRequest(identity)) return;
-    const merged = mergeReferenceHotwords(hotwordsText.value, result.terms);
-    hotwordsText.value = merged.text;
-    referenceHotwordNotice.value = `已合并：新增 ${merged.added_count} 项，过滤无效或重复结果 ${result.rejected_count} 项。`;
+    if (viewUnmounted) return;
+    referenceHotwordFailures.value = batch.failures;
+    const status = batch.cancelled ? '已取消批量提取' : '批量提取结束';
+    referenceHotwordNotice.value = `${status}：成功 ${batch.completed} 个文件，失败 ${batch.failures.length} 个；新增 ${addedCount} 项，过滤无效或重复结果 ${rejectedCount} 项。`;
   } catch (reason) {
-    if (isCurrentReferenceHotwordRequest(identity)) referenceHotwordError.value = formatReferenceHotwordError(reason);
+    if (!viewUnmounted) referenceHotwordError.value = formatReferenceHotwordError(reason);
   } finally {
-    if (busyReferenceHotwordRequestId.value === identity.requestId) busyReferenceHotwordRequestId.value = null;
-    if (cancellingReferenceHotwordRequestId.value === identity.requestId) cancellingReferenceHotwordRequestId.value = null;
-    if (activeReferenceHotwordRequest.value?.requestId === identity.requestId) activeReferenceHotwordRequest.value = null;
+    activeReferenceHotwordRequest.value = null;
+    referenceHotwordProgress.value = null;
+    referenceHotwordsBusy.value = false;
+    referenceHotwordCancelRequested.value = false;
   }
 }
 
-onBeforeUnmount(cancelActiveReferenceHotwordRequest);
+onBeforeUnmount(() => {
+  viewUnmounted = true;
+  cancelActiveReferenceHotwordRequest();
+});
 
 async function chooseAudio(): Promise<void> {
   const selected = await api.selectAudioFile();
@@ -280,21 +297,31 @@ async function chooseReferenceMarkdown(): Promise<void> {
   if (!selected.length) return;
   const paths = [...new Set([...referenceMarkdownPaths.value, ...selected])];
   if (paths.length !== referenceMarkdownPaths.value.length) referenceMarkdownPaths.value = paths;
-  if (!hotwordSourcePath.value) hotwordSourcePath.value = selected[0];
+  if (!hotwordSourcePaths.value.length) addHotwordSources(selected.slice(0, 1));
 }
 
 function removeReferenceMarkdown(path: string): void {
-  if (hotwordSourcePath.value === path && !additionalHotwordPaths.value.includes(path)) {
-    additionalHotwordPaths.value = [...additionalHotwordPaths.value, path];
-  }
   referenceMarkdownPaths.value = referenceMarkdownPaths.value.filter((item) => item !== path);
 }
 
-async function chooseHotwordSource(): Promise<void> {
-  const selected = await api.selectMarkdownFile();
-  if (!selected) return;
-  if (!additionalHotwordPaths.value.includes(selected)) additionalHotwordPaths.value = [...additionalHotwordPaths.value, selected];
-  hotwordSourcePath.value = selected;
+function addHotwordSources(paths: string[]): void {
+  if (referenceHotwordsBusy.value) return;
+  hotwordSourcePaths.value = [...new Set([...hotwordSourcePaths.value, ...paths])];
+}
+
+function addSelectedHotwordReference(): void {
+  if (hotwordReferenceToAdd.value) addHotwordSources([hotwordReferenceToAdd.value]);
+  hotwordReferenceToAdd.value = '';
+}
+
+function removeHotwordSource(path: string): void {
+  if (referenceHotwordsBusy.value) return;
+  hotwordSourcePaths.value = hotwordSourcePaths.value.filter((item) => item !== path);
+}
+
+async function chooseHotwordSources(): Promise<void> {
+  const selected = await api.selectHotwordSourceFiles();
+  if (selected.length) addHotwordSources(selected);
 }
 
 function buildDraft(): WorkflowDraft {
@@ -707,18 +734,24 @@ function phaseLabel(value: string | null | undefined): string {
           </label>
           <div class="privacy-confirmation">
             <label>
-              <span>热词提取文本</span>
-              <div class="input-action">
-                <select v-model="hotwordSourcePath" aria-label="热词提取文本">
-                  <option value="">请选择文本文件</option>
-                  <option v-for="path in hotwordSourceOptions" :key="path" :value="path">
-                    {{ referenceMarkdownPaths.includes(path) ? '参考速记 · ' : '单独选择 · ' }}{{ path }}
-                  </option>
-                </select>
-                <button type="button" title="选择其他文本文件" aria-label="选择其他文本文件" @click="chooseHotwordSource"><FolderOpen :size="17" /></button>
-              </div>
-              <small class="field-hint">可选参考速记或单独选择 Markdown / TXT 文件；长文本会分段发送并合并热词，可能需要更长时间和产生更多用量。</small>
+              <span>热词提取文本（已选 {{ hotwordSourcePaths.length }} 个）</span>
+              <select v-model="hotwordReferenceToAdd" aria-label="从参考速记添加热词提取文件" :disabled="referenceHotwordsBusy || !availableHotwordReferences.length" @change="addSelectedHotwordReference">
+                <option value="">从参考速记中添加</option>
+                <option v-for="path in availableHotwordReferences" :key="path" :value="path">{{ path }}</option>
+              </select>
             </label>
+            <div class="hotword-source-actions">
+              <button type="button" :disabled="referenceHotwordsBusy || !availableHotwordReferences.length" @click="addHotwordSources(availableHotwordReferences)">添加全部参考速记</button>
+              <button type="button" :disabled="referenceHotwordsBusy" @click="chooseHotwordSources"><FolderOpen :size="17" /> 批量选择文本文件</button>
+            </div>
+            <div v-if="hotwordSourcePaths.length" class="hotword-source-list" aria-label="已选热词提取文件">
+              <div v-for="path in hotwordSourcePaths" :key="path" class="input-action">
+                <input :value="path" :title="path" aria-label="热词提取文件" type="text" readonly />
+                <button type="button" :disabled="referenceHotwordsBusy" :aria-label="`移除热词提取文件 ${path}`" title="移除此文件" @click="removeHotwordSource(path)"><Trash2 :size="17" /></button>
+              </div>
+            </div>
+            <small v-if="hotwordSourcePaths.length > 4" class="field-hint">向下滚动列表可查看其余文件。</small>
+            <small class="field-hint">可从参考速记添加或批量选择 Markdown / TXT 文件。文件会依次提取，长文本会分段发送并合并热词，可能需要更长时间和产生更多用量。</small>
             <label v-if="referenceHotwordProfiles.length > 1">
               <span>热词提取 Profile</span>
               <select v-model="referenceHotwordProfileId" :disabled="referenceHotwordsBusy">
@@ -732,20 +765,25 @@ function phaseLabel(value: string | null | undefined): string {
             <p>{{ referenceHotwordAuthorizationText }}</p>
             <button
               type="button"
-              :disabled="!hotwordSourcePath.trim() || !selectedReferenceHotwordProfile || selectedReferenceHotwordProfile.auth_mode !== 'bearer' || referenceHotwordsBusy || submitting"
+              :disabled="!hotwordSourcePaths.length || !selectedReferenceHotwordProfile || selectedReferenceHotwordProfile.auth_mode !== 'bearer' || referenceHotwordsBusy || submitting"
               @click="extractReferenceHotwords"
             >
-              {{ referenceHotwordsBusy ? '正在提取…' : '发送文本并提取热词' }}
+              {{ referenceHotwordProgress ? `正在提取 ${referenceHotwordProgress.index}/${referenceHotwordProgress.total}…` : '发送文本并提取热词' }}
             </button>
+            <small v-if="referenceHotwordProgress" class="field-hint" role="status" :title="referenceHotwordProgress.path">当前文件：{{ referenceHotwordProgress.path }}</small>
             <button
               v-if="referenceHotwordsBusy"
               type="button"
-              :disabled="cancellingReferenceHotwordRequestId === busyReferenceHotwordRequestId"
+              :disabled="referenceHotwordCancelRequested"
               @click="cancelReferenceHotwordExtraction"
             >
-              {{ cancellingReferenceHotwordRequestId === busyReferenceHotwordRequestId ? '正在取消…' : '取消提取' }}
+              {{ referenceHotwordCancelRequested ? '正在取消…' : '取消提取' }}
             </button>
             <div v-if="referenceHotwordError" class="workflow-error">{{ referenceHotwordError }}</div>
+            <div v-if="referenceHotwordFailures.length" class="workflow-error hotword-failures" role="alert">
+              <strong>以下文件提取失败：</strong>
+              <div v-for="failure in referenceHotwordFailures" :key="failure.path">{{ failure.path }}：{{ failure.message }}</div>
+            </div>
             <small v-if="referenceHotwordNotice" class="field-hint">{{ referenceHotwordNotice }}</small>
           </div>
         </div>

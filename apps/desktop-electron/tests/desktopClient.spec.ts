@@ -48,7 +48,7 @@ describe('desktop profile IPC payloads', () => {
     expect(calls).toEqual([{ command: 'select_markdown_file', args: { referenceOnly: true } }])
   })
 
-  it('requests multiple reference files and a separate text source', async () => {
+  it('requests multiple reference files and separate text sources', async () => {
     const calls: Array<{ command: string; args: Record<string, unknown> | undefined }> = []
     vi.stubGlobal('window', {
       asrLocal: {
@@ -59,9 +59,11 @@ describe('desktop profile IPC payloads', () => {
       },
     })
     await expect(api.selectReferenceMarkdownFiles()).resolves.toEqual(['one.md', 'two.md'])
+    await expect(api.selectHotwordSourceFiles()).resolves.toEqual(['one.md', 'two.md'])
     await expect(api.selectMarkdownFile()).resolves.toBe('terms.txt')
     expect(calls).toEqual([
       { command: 'select_markdown_file', args: { referenceOnly: true, multiple: true } },
+      { command: 'select_markdown_file', args: { multiple: true } },
       { command: 'select_markdown_file', args: undefined },
     ])
   })
