@@ -117,7 +117,7 @@ async function invoke(command: string, args: Record<string, unknown>): Promise<u
     }
     case 'select_markdown_file': {
       const isReferenceOnly = args.referenceOnly === true
-      const multiple = isReferenceOnly && args.multiple === true
+      const multiple = args.multiple === true
       const extensions = isReferenceOnly ? ['md', 'markdown'] : ['md', 'markdown', 'txt']
       const result = await dialog.showOpenDialog(mainWindow!, {
         properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],

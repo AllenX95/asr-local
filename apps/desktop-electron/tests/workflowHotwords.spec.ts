@@ -1,13 +1,37 @@
-import { describe, expect, it } from 'vitest'
-import type { WorkflowSummaryProfile, WorkflowSummaryTemplate } from '../src/ipc/workerTypes'
+import { describe, expect, it, vi } from 'vitest'
+import type { ReferenceHotwordExtractionResult, WorkflowSummaryProfile, WorkflowSummaryTemplate } from '../src/ipc/workerTypes'
 import {
   isSameReferenceHotwordRequest,
   mergeReferenceHotwords,
   parseHotwordInput,
   formatReferenceHotwordError,
+  runReferenceHotwordBatch,
   type ReferenceHotwordRequestIdentity,
 } from '../src/features/workflow/referenceHotwords'
 import { buildWorkflowDraft } from '../src/features/workflow/workflowDraft'
+
+function extractionResult(terms: string[]): ReferenceHotwordExtractionResult {
+  return {
+    terms,
+    model: 'mimo-v2.6-flash',
+    prompt_version: 'test',
+    reference_sha256: 'test',
+    reference_name: 'test',
+    usage: null,
+    rejected_count: 0,
+    elapsed_ms: 1,
+  }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
 
 describe('reference hotword workflow state', () => {
   it.each([
@@ -80,6 +104,84 @@ describe('reference hotword workflow state', () => {
     expect(isSameReferenceHotwordRequest(expected, { ...expected, referencePath: 'other.md' })).toBe(false)
     expect(isSameReferenceHotwordRequest(expected, { ...expected, profileVersion: 4 })).toBe(false)
     expect(isSameReferenceHotwordRequest(expected, null)).toBe(false)
+  })
+
+  it('extracts selected files one at a time, merges successes and continues after a file fails', async () => {
+    const first = deferred<ReferenceHotwordExtractionResult>()
+    const second = deferred<ReferenceHotwordExtractionResult>()
+    const third = deferred<ReferenceHotwordExtractionResult>()
+    const extract = vi.fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+      .mockReturnValueOnce(third.promise)
+    let nextId = 0
+    let text = 'Manual'
+    const started: string[] = []
+    const batch = runReferenceHotwordBatch({
+      paths: ['one.md', 'broken.txt', 'three.md'],
+      profileId: 'mimo-profile',
+      profileVersion: 3,
+      createRequestId: () => `request-${++nextId}`,
+      extract,
+      shouldContinue: () => true,
+      onStart: (request) => { started.push(request.referencePath) },
+      onFinish: () => {},
+      onSuccess: (result) => { text = mergeReferenceHotwords(text, result.terms).text },
+    })
+
+    expect(started).toEqual(['one.md'])
+    first.resolve(extractionResult(['Shared', 'First']))
+    await Promise.resolve()
+    expect(started).toEqual(['one.md', 'broken.txt'])
+    text += '\nManual edit during extraction'
+    second.reject(new Error('REFERENCE_DOCUMENT_UNREADABLE'))
+    await Promise.resolve()
+    expect(started).toEqual(['one.md', 'broken.txt', 'three.md'])
+    third.resolve(extractionResult(['Shared', 'Third']))
+
+    expect(await batch).toEqual({
+      completed: 2,
+      failures: [{ path: 'broken.txt', message: expect.stringContaining('无法读取所选文本文件') }],
+      cancelled: false,
+    })
+    expect(text).toBe('Manual\nShared\nFirst\nManual edit during extraction\nThird')
+    expect(extract.mock.calls.map(([request]) => request)).toEqual([
+      { requestId: 'request-1', referencePath: 'one.md', profileId: 'mimo-profile', profileVersion: 3 },
+      { requestId: 'request-2', referencePath: 'broken.txt', profileId: 'mimo-profile', profileVersion: 3 },
+      { requestId: 'request-3', referencePath: 'three.md', profileId: 'mimo-profile', profileVersion: 3 },
+    ])
+  })
+
+  it('stops after cancellation, retains earlier results and ignores a late response', async () => {
+    const first = deferred<ReferenceHotwordExtractionResult>()
+    const inFlight = deferred<ReferenceHotwordExtractionResult>()
+    const extract = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(inFlight.promise)
+    let cancelled = false
+    let text = 'Manual'
+    let requestId = 0
+    const finished: string[] = []
+    const batch = runReferenceHotwordBatch({
+      paths: ['one.md', 'two.txt', 'three.md'],
+      profileId: 'mimo-profile',
+      profileVersion: 1,
+      createRequestId: () => `request-${++requestId}`,
+      extract,
+      shouldContinue: () => !cancelled,
+      onStart: () => {},
+      onFinish: (request) => { finished.push(request.referencePath) },
+      onSuccess: (result) => { text = mergeReferenceHotwords(text, result.terms).text },
+    })
+
+    first.resolve(extractionResult(['First']))
+    await Promise.resolve()
+    expect(extract).toHaveBeenCalledTimes(2)
+    cancelled = true
+    inFlight.resolve(extractionResult(['Late result']))
+
+    expect(await batch).toEqual({ completed: 1, failures: [], cancelled: true })
+    expect(text).toBe('Manual\nFirst')
+    expect(extract).toHaveBeenCalledTimes(2)
+    expect(finished).toEqual(['one.md', 'two.txt'])
   })
 
   it('passes the merged terms into the ASR prompt_input.hotwords in the final draft', () => {

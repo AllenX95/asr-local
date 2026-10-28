@@ -1,3 +1,5 @@
+import type { ReferenceHotwordExtractionResult } from '../../ipc/workerTypes'
+
 export const REFERENCE_HOTWORDS_MODEL = 'mimo-v2.6-flash'
 
 export function matchingReferenceHotwordProfiles<T extends { model: string }>(profiles: T[]): T[] {
@@ -129,4 +131,52 @@ export function isSameReferenceHotwordRequest(
     && expected.referencePath === current.referencePath
     && expected.profileId === current.profileId
     && expected.profileVersion === current.profileVersion
+}
+
+export interface ReferenceHotwordBatchFailure {
+  path: string
+  message: string
+}
+
+export interface ReferenceHotwordBatchResult {
+  completed: number
+  failures: ReferenceHotwordBatchFailure[]
+  cancelled: boolean
+}
+
+export async function runReferenceHotwordBatch(options: {
+  paths: readonly string[]
+  profileId: string
+  profileVersion: number
+  createRequestId: () => string
+  extract: (request: ReferenceHotwordRequestIdentity) => Promise<ReferenceHotwordExtractionResult>
+  shouldContinue: () => boolean
+  onStart: (request: ReferenceHotwordRequestIdentity, index: number, total: number) => void
+  onFinish: (request: ReferenceHotwordRequestIdentity) => void
+  onSuccess: (result: ReferenceHotwordExtractionResult) => void
+}): Promise<ReferenceHotwordBatchResult> {
+  const failures: ReferenceHotwordBatchFailure[] = []
+  let completed = 0
+  for (const [index, referencePath] of options.paths.entries()) {
+    if (!options.shouldContinue()) break
+    const request: ReferenceHotwordRequestIdentity = {
+      requestId: options.createRequestId(),
+      referencePath,
+      profileId: options.profileId,
+      profileVersion: options.profileVersion,
+    }
+    options.onStart(request, index, options.paths.length)
+    try {
+      const result = await options.extract(request)
+      if (!options.shouldContinue()) break
+      options.onSuccess(result)
+      completed += 1
+    } catch (reason) {
+      if (!options.shouldContinue()) break
+      failures.push({ path: referencePath, message: formatReferenceHotwordError(reason) })
+    } finally {
+      options.onFinish(request)
+    }
+  }
+  return { completed, failures, cancelled: !options.shouldContinue() }
 }

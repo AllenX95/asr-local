@@ -42,6 +42,7 @@ export const api = {
     })),
   selectAudioFile: () => invokeDesktop<string | null>('select_audio_file', undefined, () => null),
   selectMarkdownFile: () => invokeDesktop<string | null>('select_markdown_file', undefined, () => null),
+  selectHotwordSourceFiles: () => invokeDesktop<string[]>('select_markdown_file', { multiple: true }, () => []),
   selectReferenceMarkdownFile: () => invokeDesktop<string | null>('select_markdown_file', { referenceOnly: true }, () => null),
   selectReferenceMarkdownFiles: () => invokeDesktop<string[]>('select_markdown_file', { referenceOnly: true, multiple: true }, () => []),
   selectOutputDir: () => invokeDesktop<string | null>('select_output_dir', undefined, () => null),

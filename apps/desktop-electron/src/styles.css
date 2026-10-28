@@ -705,6 +705,23 @@ h2 {
   justify-self: start;
 }
 
+.hotword-source-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.hotword-source-list {
+  display: grid;
+  gap: 7px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.hotword-failures {
+  overflow-wrap: anywhere;
+}
+
 .transcription-instruction {
   align-self: start;
 }
