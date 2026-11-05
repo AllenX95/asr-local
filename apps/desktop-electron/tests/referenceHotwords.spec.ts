@@ -93,6 +93,26 @@ describe('extractReferenceHotwords', () => {
     expect(result.elapsed_ms).toBeGreaterThanOrEqual(0)
   })
 
+  it('requests independent terms while preserving complete names and numeric units', async () => {
+    const source = '高分辨率时空感知系统：360万按照注册资本投进来，力分辨率10mN，约20亿元。'
+    const fetchImpl = vi.fn(async () => providerResponse(JSON.stringify({
+      terms: ['高分辨率时空感知系统', '360万', '注册资本', '力分辨率', '10mN', '约20亿元'],
+    }))) as unknown as typeof fetch
+
+    const result = await input(fetchImpl, { document: { ...document, content: source } })
+    const request = (fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1]
+    const payload = JSON.parse(String(request.body)) as { messages: { content: string }[] }
+    const prompt = payload.messages[0].content
+
+    expect(REFERENCE_HOTWORDS_PROMPT_VERSION).toBe('asr-reference-hotwords-v4')
+    expect(prompt).toContain('可独立识别的最小完整词项')
+    expect(prompt).toContain('不要机械地按字数或空格拆分')
+    expect(prompt).toContain('“360万”和“注册资本”')
+    expect(prompt).toContain('“力分辨率”和“10mN”')
+    expect(prompt).toContain('每个词项必须从速记原文连续拷贝')
+    expect(result.terms).toEqual(['高分辨率时空感知系统', '360万', '注册资本', '力分辨率', '10mN', '约20亿元'])
+  })
+
   it('extracts from all parts of long text, including boundary terms, and deduplicates overlaps', async () => {
     const shared = '重复术语'
     const boundary = '跨界😄词条'
